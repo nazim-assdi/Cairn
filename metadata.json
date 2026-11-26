@@ -1,0 +1,6 @@
+{
+  "name": "Cairn",
+  "description": "Offline edge AI chatbot for private PDF, DOCX, and TXT document analysis with integrated local audio, video, and image generation.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
