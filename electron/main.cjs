@@ -162,10 +162,6 @@ function installApplicationMenu() {
 }
 
 async function createWindow() {
-  if (app.isPackaged) {
-    protocol.handle('app', handleAppRequest);
-  }
-
   mainWindow = new BrowserWindow({
     title: 'Cairn — Offline Edge Document & Media Studio',
     width: 1440,
@@ -249,6 +245,9 @@ if (!hasSingleInstance) {
   });
 
   app.whenReady().then(async () => {
+    if (app.isPackaged) {
+      protocol.handle('app', handleAppRequest);
+    }
     app.setAppUserModelId('com.ntech.cairn');
     installApplicationMenu();
     await createWindow();
