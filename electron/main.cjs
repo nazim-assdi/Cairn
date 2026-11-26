@@ -59,7 +59,7 @@ async function handleAppRequest(request) {
     }
 
     const decodedPath = decodeURIComponent(url.pathname);
-    const relativePath = decodedPath.replace(/^\\/+/, '') || 'index.html';
+    const relativePath = decodedPath.replace(/^\/+/, '') || 'index.html';
     const distRoot = path.resolve(app.getAppPath(), 'dist');
     let filePath = path.resolve(distRoot, relativePath);
 
@@ -151,7 +151,7 @@ function installApplicationMenu() {
             type: 'info',
             title: 'About Cairn',
             message: 'Cairn',
-            detail: 'Offline Edge Document & Media Studio\\nDeveloper: N Tech\\nVersion 1.0.0',
+            detail: 'Offline Edge Document & Media Studio\nDeveloper: N Tech\nVersion 1.0.0',
           }),
         },
       ],
