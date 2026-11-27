@@ -219,7 +219,7 @@ export class LocalLlmBridge {
           type: 'generate',
           requestId,
           messages,
-          maxNewTokens: options?.maxNewTokens ?? 512,
+          maxNewTokens: options?.maxNewTokens ?? 192,
           temperature: options?.temperature ?? 0.2,
         });
       } catch (error) {
