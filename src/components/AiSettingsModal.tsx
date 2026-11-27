@@ -221,7 +221,11 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
             )}
 
             {activeSpec.runtime === 'browser-llm' && (
-              <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
+              <>
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  Cairn tries WebGPU first and automatically retries smaller Qwen models on CPU/WASM if the graphics driver cannot run them. The 7B browser model needs a compatible high-memory GPU; use 0.5B or 1.5B on low-memory PCs.
+                </p>
+                <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-slate-700 dark:text-slate-300">
                   {neuralStatusMessage || activeSpec.description}
                 </div>
@@ -242,7 +246,8 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
                       : 'Download & Cache Offline'}
                   </span>
                 </button>
-              </div>
+                </div>
+              </>
             )}
           </section>
 
