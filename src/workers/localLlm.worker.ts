@@ -136,7 +136,9 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
           });
 
           const loaded = await pipeline('text-generation', msg.modelId, {
-            dtype: backend === 'webgpu' ? 'q4f16' : 'q4',
+            // The published 0.5B/1.5B ONNX model cards use q4.
+            // Reserve q4f16 for the large 7B WebGPU model.
+            dtype: isLargeModel ? 'q4f16' : 'q4',
             device: backend,
             progress_callback: onProgress,
           });
