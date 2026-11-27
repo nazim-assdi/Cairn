@@ -34,7 +34,7 @@ function markModelCached(modelId: string) {
     existing.add(modelId);
     localStorage.setItem(CACHED_MODELS_KEY, JSON.stringify(Array.from(existing)));
   } catch {
-    // Ignore
+    // Cache Storage itself remains the source of truth for model weights.
   }
 }
 
@@ -42,6 +42,7 @@ export class LocalLlmBridge {
   private worker: Worker | null = null;
   private onState: (event: LocalLlmStateEvent) => void;
   private currentModelId: AiEngineId = 'builtin-edge';
+  private readyModelId: AiEngineId | null = null;
   private activeGen: {
     requestId: string;
     onToken: (fullText: string) => void;
@@ -53,12 +54,38 @@ export class LocalLlmBridge {
     this.onState = onState;
   }
 
+  private reportError(message: string) {
+    this.readyModelId = null;
+    this.onState({
+      status: 'error',
+      modelId: this.currentModelId,
+      progress: 0,
+      message,
+    });
+  }
+
+  private failActiveGeneration(message: string) {
+    if (!this.activeGen) return;
+    const generation = this.activeGen;
+    this.activeGen = null;
+    generation.reject(new Error(message));
+  }
+
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(
-      new URL('../workers/localLlm.worker.ts', import.meta.url),
-      { type: 'module' }
-    );
+
+    let worker: Worker;
+    try {
+      worker = new Worker(
+        new URL('../workers/localLlm.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to start the local AI worker.';
+      this.reportError(message);
+      throw new Error(message);
+    }
 
     worker.addEventListener('message', (event: MessageEvent<WorkerOutMessage>) => {
       const msg = event.data;
@@ -75,35 +102,55 @@ export class LocalLlmBridge {
           status: 'loading',
           modelId: this.currentModelId,
           progress: msg.progress,
-          message: msg.file ? `Caching ${msg.file.split('/').pop()} (${msg.progress}%)` : `Caching model (${msg.progress}%)`,
+          message: msg.file
+            ? `Loading ${msg.file.split('/').pop()} (${msg.progress}%)`
+            : `Loading model (${msg.progress}%)`,
         });
       } else if (msg.type === 'ready') {
+        this.readyModelId = msg.modelId as AiEngineId;
         markModelCached(msg.modelId);
         this.onState({
           status: 'ready',
-          modelId: msg.modelId as AiEngineId,
+          modelId: this.readyModelId,
           backend: msg.backend,
           progress: 100,
           message: `Ready offline (${msg.backend.toUpperCase()})`,
         });
       } else if (msg.type === 'error') {
-        this.onState({
-          status: 'error',
-          modelId: this.currentModelId,
-          progress: 0,
-          message: msg.error,
-        });
+        this.readyModelId = null;
+        this.reportError(msg.error);
+        this.failActiveGeneration(msg.error);
       } else if (msg.type === 'token' && this.activeGen?.requestId === msg.requestId) {
         this.activeGen.onToken(msg.text);
       } else if (msg.type === 'done' && this.activeGen?.requestId === msg.requestId) {
-        const gen = this.activeGen;
+        const generation = this.activeGen;
         this.activeGen = null;
-        gen.resolve(msg.text);
+        generation.resolve(msg.text);
       } else if (msg.type === 'gen-error' && this.activeGen?.requestId === msg.requestId) {
-        const gen = this.activeGen;
+        const generation = this.activeGen;
         this.activeGen = null;
-        gen.reject(new Error(msg.error));
+        generation.reject(new Error(msg.error));
       }
+    });
+
+    worker.addEventListener('error', (event: ErrorEvent) => {
+      const message = event.message || 'The local AI worker crashed while loading or running Qwen.';
+      if (this.worker === worker) {
+        this.worker.terminate();
+        this.worker = null;
+      }
+      this.reportError(message);
+      this.failActiveGeneration(message);
+    });
+
+    worker.addEventListener('messageerror', () => {
+      const message = 'The local AI worker returned an unreadable message and was restarted.';
+      if (this.worker === worker) {
+        this.worker.terminate();
+        this.worker = null;
+      }
+      this.reportError(message);
+      this.failActiveGeneration(message);
     });
 
     this.worker = worker;
@@ -113,6 +160,7 @@ export class LocalLlmBridge {
   loadModel(modelId: AiEngineId) {
     if (modelId === 'builtin-edge') {
       this.currentModelId = 'builtin-edge';
+      this.readyModelId = 'builtin-edge';
       this.onState({
         status: 'ready',
         modelId: 'builtin-edge',
@@ -122,16 +170,21 @@ export class LocalLlmBridge {
       return;
     }
 
+    this.failActiveGeneration('The model was changed while a response was generating.');
     this.currentModelId = modelId;
+    this.readyModelId = null;
     this.onState({
       status: 'loading',
       modelId,
       progress: 1,
-      message: 'Initializing on-device runtime...',
+      message: 'Starting local model runtime...',
     });
 
-    const worker = this.ensureWorker();
-    worker.postMessage({ type: 'load', modelId });
+    try {
+      this.ensureWorker().postMessage({ type: 'load', modelId });
+    } catch (error) {
+      this.reportError(error instanceof Error ? error.message : 'Unable to start local model runtime.');
+    }
   }
 
   generate(
@@ -139,18 +192,38 @@ export class LocalLlmBridge {
     onToken: (fullText: string) => void,
     options?: { maxNewTokens?: number; temperature?: number }
   ): Promise<string> {
-    const worker = this.ensureWorker();
-    const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    if (this.readyModelId !== this.currentModelId) {
+      return Promise.reject(
+        new Error('The selected Qwen model is not loaded yet. Open AI Settings and load the cached model.')
+      );
+    }
 
+    let worker: Worker;
+    try {
+      worker = this.ensureWorker();
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error('Unable to start Qwen worker.'));
+    }
+
+    if (this.activeGen) {
+      return Promise.reject(new Error('A local Qwen response is already running.'));
+    }
+
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     return new Promise((resolve, reject) => {
       this.activeGen = { requestId, onToken, resolve, reject };
-      worker.postMessage({
-        type: 'generate',
-        requestId,
-        messages,
-        maxNewTokens: options?.maxNewTokens ?? 768,
-        temperature: options?.temperature ?? 0.2,
-      });
+      try {
+        worker.postMessage({
+          type: 'generate',
+          requestId,
+          messages,
+          maxNewTokens: options?.maxNewTokens ?? 512,
+          temperature: options?.temperature ?? 0.2,
+        });
+      } catch (error) {
+        this.activeGen = null;
+        reject(error instanceof Error ? error : new Error('Unable to send prompt to Qwen.'));
+      }
     });
   }
 
@@ -161,9 +234,11 @@ export class LocalLlmBridge {
   }
 
   dispose() {
+    this.failActiveGeneration('Cairn closed the local AI runtime.');
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
     }
+    this.readyModelId = null;
   }
 }
