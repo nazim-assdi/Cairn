@@ -1,12 +1,12 @@
 import {
-  AutoModelForCausalLM,
-  AutoTokenizer,
+  pipeline,
   env,
   InterruptableStoppingCriteria,
   TextStreamer,
 } from '@huggingface/transformers';
 
-// Always use browser Cache Storage so downloaded ONNX weights persist offline
+// Transformers.js keeps model files in the browser Cache Storage so the
+// same model can be loaded again without a network connection.
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
@@ -22,8 +22,7 @@ type WorkerRequest =
   | { type: 'interrupt' };
 
 let loadedModelId: string | null = null;
-let tokenizer: Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>> | null = null;
-let model: Awaited<ReturnType<typeof AutoModelForCausalLM.from_pretrained>> | null = null;
+let generator: any = null;
 let activeBackend: 'webgpu' | 'wasm' = 'wasm';
 const stoppingCriteria = new InterruptableStoppingCriteria();
 
@@ -33,10 +32,32 @@ async function detectWebGpu(): Promise<boolean> {
       gpu?: { requestAdapter: () => Promise<unknown | null> };
     };
     if (!nav.gpu) return false;
-    const adapter = await nav.gpu.requestAdapter();
-    return Boolean(adapter);
+    return Boolean(await nav.gpu.requestAdapter());
   } catch {
     return false;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string' && error) return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Unknown local model runtime error';
+  }
+}
+
+async function disposeCurrentGenerator(): Promise<void> {
+  const current = generator;
+  generator = null;
+  loadedModelId = null;
+  if (current && typeof current.dispose === 'function') {
+    try {
+      await current.dispose();
+    } catch {
+      // Releasing the worker below also releases any remaining runtime memory.
+    }
   }
 }
 
@@ -50,7 +71,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 
   if (msg.type === 'load') {
     try {
-      if (loadedModelId === msg.modelId && tokenizer && model) {
+      if (loadedModelId === msg.modelId && generator) {
         self.postMessage({
           type: 'ready',
           modelId: msg.modelId,
@@ -59,93 +80,123 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         return;
       }
 
-      const hasWebGpu = await detectWebGpu();
-      activeBackend = hasWebGpu ? 'webgpu' : 'wasm';
+      await disposeCurrentGenerator();
+      stoppingCriteria.reset();
 
-      if (msg.modelId.includes('7B') && !hasWebGpu) {
-        self.postMessage({
-          type: 'error',
-          error:
-            'Qwen 2.5 Coder 7B in-browser requires WebGPU VRAM. Use "Qwen 2.5 Coder 7B (Local Ollama)" via `ollama run qwen2.5-coder:7b` or select Qwen 2.5 Coder 1.5B / 0.5B.',
-        });
-        return;
+      const isLargeModel = msg.modelId.toUpperCase().includes('7B');
+      const hasWebGpu = await detectWebGpu();
+
+      if (isLargeModel && !hasWebGpu) {
+        throw new Error(
+          'Qwen 7B needs a compatible WebGPU graphics device with substantial dedicated memory. This PC should use Qwen 0.5B or 1.5B in CPU/WASM mode instead.'
+        );
       }
 
-      self.postMessage({
-        type: 'status',
-        message: `Loading ${msg.modelId} (${activeBackend.toUpperCase()})...`,
-        progress: 2,
-      });
+      // Small models try the GPU first, then automatically fall back to CPU/WASM.
+      // A detected WebGPU adapter does not guarantee that every ONNX operation
+      // or quantized model is supported by that driver.
+      const backends: Array<'webgpu' | 'wasm'> = isLargeModel
+        ? ['webgpu']
+        : hasWebGpu
+          ? ['webgpu', 'wasm']
+          : ['wasm'];
 
       const progressMap = new Map<string, number>();
-
-      const onProgress = (info: { status?: string; file?: string; progress?: number }) => {
-        if (typeof info.progress === 'number' && info.file) {
-          progressMap.set(info.file, info.progress);
-          const vals = Array.from(progressMap.values());
-          const avg = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
-          self.postMessage({
-            type: 'progress',
-            progress: Math.min(99, Math.round(avg)),
-            file: info.file,
-          });
-        }
+      const onProgress = (info: {
+        status?: string;
+        file?: string;
+        progress?: number;
+      }) => {
+        if (typeof info.progress !== 'number' || !info.file) return;
+        progressMap.set(info.file, info.progress);
+        const values = Array.from(progressMap.values());
+        const average =
+          values.reduce((sum, value) => sum + value, 0) /
+          Math.max(1, values.length);
+        self.postMessage({
+          type: 'progress',
+          progress: Math.min(99, Math.round(average)),
+          file: info.file,
+        });
       };
 
-      tokenizer = await AutoTokenizer.from_pretrained(msg.modelId, {
-        progress_callback: onProgress,
-      });
+      let lastLoadError: unknown = null;
+      for (let index = 0; index < backends.length; index += 1) {
+        const backend = backends[index];
+        try {
+          self.postMessage({
+            type: 'status',
+            message:
+              backend === 'webgpu'
+                ? `Loading ${msg.modelId} on WebGPU...`
+                : hasWebGpu
+                  ? 'GPU runtime was not compatible; retrying on CPU/WASM...'
+                  : `Loading ${msg.modelId} on CPU/WASM...`,
+            progress: index === 0 ? 2 : 90,
+          });
 
-      model = await AutoModelForCausalLM.from_pretrained(msg.modelId, {
-        dtype: msg.modelId.includes('7B') ? 'q4f16' : 'q4',
-        device: activeBackend,
-        progress_callback: onProgress,
-      });
+          const loaded = await pipeline('text-generation', msg.modelId, {
+            dtype: backend === 'webgpu' ? 'q4f16' : 'q4',
+            device: backend,
+            progress_callback: onProgress,
+          });
 
-      loadedModelId = msg.modelId;
-      self.postMessage({
-        type: 'ready',
-        modelId: msg.modelId,
-        backend: activeBackend,
-      });
-    } catch (err) {
-      loadedModelId = null;
-      tokenizer = null;
-      model = null;
+          generator = loaded;
+          loadedModelId = msg.modelId;
+          activeBackend = backend;
+
+          self.postMessage({
+            type: 'ready',
+            modelId: msg.modelId,
+            backend,
+          });
+          return;
+        } catch (error) {
+          lastLoadError = error;
+          generator = null;
+          loadedModelId = null;
+
+          if (index < backends.length - 1) {
+            self.postMessage({
+              type: 'status',
+              message: `WebGPU could not start this model. Retrying with CPU/WASM: ${errorMessage(error)}`,
+              progress: 90,
+            });
+          }
+        }
+      }
+
+      throw new Error(
+        `Unable to load ${msg.modelId}. ${errorMessage(lastLoadError)}`
+      );
+    } catch (error) {
+      await disposeCurrentGenerator();
       self.postMessage({
         type: 'error',
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Unable to load on-device model. Check network for initial weight caching.',
+        error: errorMessage(error),
       });
     }
     return;
   }
 
   if (msg.type === 'generate') {
-    if (!tokenizer || !model) {
+    if (!generator || loadedModelId === null) {
       self.postMessage({
         type: 'gen-error',
         requestId: msg.requestId,
-        error: 'On-device neural model is not loaded yet.',
+        error: 'The Qwen model is not loaded. Load the cached model from AI Settings first.',
       });
       return;
     }
 
     try {
       stoppingCriteria.reset();
-      const inputs = tokenizer.apply_chat_template(msg.messages, {
-        add_generation_prompt: true,
-        return_dict: true,
-      }) as Record<string, unknown>;
-
       let accumulated = '';
-      const streamer = new TextStreamer(tokenizer, {
+      const streamer = new TextStreamer(generator.tokenizer, {
         skip_prompt: true,
         skip_special_tokens: true,
-        callback_function: (tokenText: string) => {
-          accumulated += tokenText;
+        callback_function: (text: string) => {
+          accumulated += text;
           self.postMessage({
             type: 'token',
             requestId: msg.requestId,
@@ -154,26 +205,39 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         },
       });
 
-      const temp = msg.temperature ?? 0.2;
-      await model.generate({
-        ...inputs,
-        max_new_tokens: msg.maxNewTokens ?? 768,
-        do_sample: temp > 0.05,
-        ...(temp > 0.05 ? { temperature: temp } : {}),
+      const temperature = msg.temperature ?? 0.2;
+      const output = await generator(msg.messages, {
+        max_new_tokens: msg.maxNewTokens ?? 512,
+        do_sample: temperature > 0.05,
+        ...(temperature > 0.05 ? { temperature } : {}),
         streamer,
         stopping_criteria: [stoppingCriteria],
       });
 
+      let finalText = accumulated.trim();
+      if (!finalText) {
+        const generated = output?.[0]?.generated_text;
+        const finalMessage = Array.isArray(generated)
+          ? generated[generated.length - 1]
+          : generated;
+        finalText =
+          typeof finalMessage === 'string'
+            ? finalMessage.trim()
+            : typeof finalMessage?.content === 'string'
+              ? finalMessage.content.trim()
+              : '';
+      }
+
       self.postMessage({
         type: 'done',
         requestId: msg.requestId,
-        text: accumulated.trim(),
+        text: finalText,
       });
-    } catch (err) {
+    } catch (error) {
       self.postMessage({
         type: 'gen-error',
         requestId: msg.requestId,
-        error: err instanceof Error ? err.message : 'Local generation error',
+        error: errorMessage(error),
       });
     }
   }
