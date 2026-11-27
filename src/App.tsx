@@ -97,7 +97,7 @@ function loadInitialAiSettings(): AiSettings {
 function getFastResponseTokenBudget(query: string, configuredMax: number): number {
   const normalized = query.toLowerCase();
   const codeHeavy =
-    /\\b(code|coding|program|function|component|debug|implement|build|script|typescript|javascript|python|sql|write tests)\\b/.test(normalized) ||
+    /\b(code|coding|program|function|component|debug|implement|build|script|typescript|javascript|python|sql|write tests)\b/.test(normalized) ||
     /কোড|প্রোগ্রাম|ফাংশন|ডিবাগ|তৈরি কর|লিখে দাও/.test(normalized);
   const target = codeHeavy ? 224 : query.trim().length > 100 ? 160 : 96;
   const configured = Number.isFinite(configuredMax) && configuredMax > 0
