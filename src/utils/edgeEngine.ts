@@ -437,19 +437,26 @@ export function buildLlmMessages(
     customSystemPrompt?.trim() ||
     'You are Cairn, a private offline AI assistant running locally on the user device. Answer clearly, directly, and conversationally. Respond in the same language or style the user uses when appropriate.';
 
+  // Keep the prompt compact: long histories and document extracts slow CPU inference.
+  const compactContextBlock =
+    contextBlock.length > 2200
+      ? `${contextBlock.slice(0, 2200)}\n[Additional document text omitted to keep local replies fast.]`
+      : contextBlock;
+
   const systemPrompt = [
     baseIdentity,
-    contextBlock
-      ? `Active local documents (${docNames}):\n${contextBlock}\n\nGround factual claims about the files in these sources and cite them like [Source 1].`
+    compactContextBlock
+      ? `Active local documents (${docNames}):\n${compactContextBlock}\n\nGround factual claims about the files in these sources and cite them like [Source 1].`
       : 'No local documents matched or loaded. Answer helpfully as a general offline AI assistant.',
   ].join('\n\n');
 
+  // Only the latest two exchanges are useful for most follow-up prompts.
   const recentTurns = history
     .filter((m) => m.intent !== 'media')
-    .slice(-8)
+    .slice(-4)
     .map((m) => ({
       role: m.role as 'user' | 'assistant',
-      content: m.content.slice(0, 1400),
+      content: m.content.slice(0, 650),
     }));
 
   return [
