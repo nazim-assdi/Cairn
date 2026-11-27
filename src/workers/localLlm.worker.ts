@@ -194,16 +194,32 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
     try {
       stoppingCriteria.reset();
       let accumulated = '';
+      let pendingText = '';
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const flushStream = () => {
+        if (flushTimer !== null) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        if (!pendingText) return;
+        const chunk = pendingText;
+        pendingText = '';
+        self.postMessage({
+          type: 'token',
+          requestId: msg.requestId,
+          text: chunk,
+        });
+      };
       const streamer = new TextStreamer(generator.tokenizer, {
         skip_prompt: true,
         skip_special_tokens: true,
         callback_function: (text: string) => {
           accumulated += text;
-          self.postMessage({
-            type: 'token',
-            requestId: msg.requestId,
-            text: accumulated,
-          });
+          pendingText += text;
+          // Batch tiny token events so the UI does not re-render for every token.
+          if (flushTimer === null) {
+            flushTimer = setTimeout(flushStream, 40);
+          }
         },
       });
 
@@ -215,6 +231,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         streamer,
         stopping_criteria: [stoppingCriteria],
       });
+      flushStream();
 
       let finalText = accumulated.trim();
       if (!finalText) {
