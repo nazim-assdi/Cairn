@@ -511,6 +511,31 @@ export default function App() {
       return;
     }
 
+    const browserModelSelected =
+      selectedEngine !== 'builtin-edge' &&
+      selectedEngine !== 'ollama:qwen2.5-coder:7b';
+
+    if (browserModelSelected && neuralStatus !== 'ready') {
+      const message =
+        neuralStatus === 'loading'
+          ? 'Qwen is still loading. Wait until AI Settings shows “Ready offline”, then send your message again.'
+          : 'Qwen is not ready yet. Open AI Settings and download the model or load its cached weights. Choose Built-in Edge AI only when you want to use the lightweight fallback.';
+      setStatusError(message);
+      const assistantMsg: ChatMessage = {
+        id: `msg-a-${Date.now() + 1}`,
+        role: 'assistant',
+        content: message,
+        createdAt: Date.now() + 1,
+        intent: 'general',
+        engineLabel: 'Qwen runtime not ready',
+      };
+      await commitSessionUpdate(targetSessionId, query, (prev) => [
+        ...prev,
+        assistantMsg,
+      ]);
+      return;
+    }
+
     const useOllama =
       selectedEngine === 'ollama:qwen2.5-coder:7b' &&
       ollamaStatus === 'connected';
