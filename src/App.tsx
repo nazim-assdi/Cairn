@@ -94,6 +94,18 @@ function loadInitialAiSettings(): AiSettings {
   }
 }
 
+function getFastResponseTokenBudget(query: string, configuredMax: number): number {
+  const normalized = query.toLowerCase();
+  const codeHeavy =
+    /\\b(code|coding|program|function|component|debug|implement|build|script|typescript|javascript|python|sql|write tests)\\b/.test(normalized) ||
+    /কোড|প্রোগ্রাম|ফাংশন|ডিবাগ|তৈরি কর|লিখে দাও/.test(normalized);
+  const target = codeHeavy ? 224 : query.trim().length > 100 ? 160 : 96;
+  const configured = Number.isFinite(configuredMax) && configuredMax > 0
+    ? configuredMax
+    : 192;
+  return Math.max(64, Math.min(configured, target));
+}
+
 export default function App() {
   const [documents, setDocuments] = useState<VaultDocument[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -543,7 +555,7 @@ export default function App() {
     if (useOllama) {
       setIsGenerating(true);
       setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 4);
+      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 3);
       const llmMessages = buildLlmMessages(
         query,
         priorHistory,
@@ -582,7 +594,7 @@ export default function App() {
           model: targetModel,
           messages: llmMessages,
           temperature: aiSettings.temperature,
-          maxTokens: aiSettings.maxTokens,
+          maxTokens: getFastResponseTokenBudget(query, aiSettings.maxTokens),
           onToken: (partial) => setStreamingText(partial),
           signal: controller.signal,
         });
@@ -633,7 +645,7 @@ export default function App() {
     if (useBrowserNeural) {
       setIsGenerating(true);
       setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 4);
+      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 3);
       const llmMessages = buildLlmMessages(
         query,
         priorHistory,
@@ -650,7 +662,7 @@ export default function App() {
           llmMessages,
           (partial) => setStreamingText(partial),
           {
-            maxNewTokens: aiSettings.maxTokens,
+            maxNewTokens: getFastResponseTokenBudget(query, aiSettings.maxTokens),
             temperature: aiSettings.temperature,
           }
         );
