@@ -45,6 +45,7 @@ export class LocalLlmBridge {
   private readyModelId: AiEngineId | null = null;
   private activeGen: {
     requestId: string;
+    text: string;
     onToken: (fullText: string) => void;
     resolve: (finalText: string) => void;
     reject: (err: Error) => void;
@@ -121,7 +122,8 @@ export class LocalLlmBridge {
         this.reportError(msg.error);
         this.failActiveGeneration(msg.error);
       } else if (msg.type === 'token' && this.activeGen?.requestId === msg.requestId) {
-        this.activeGen.onToken(msg.text);
+        this.activeGen.text += msg.text;
+        this.activeGen.onToken(this.activeGen.text);
       } else if (msg.type === 'done' && this.activeGen?.requestId === msg.requestId) {
         const generation = this.activeGen;
         this.activeGen = null;
@@ -211,7 +213,7 @@ export class LocalLlmBridge {
 
     const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     return new Promise((resolve, reject) => {
-      this.activeGen = { requestId, onToken, resolve, reject };
+      this.activeGen = { requestId, text: '', onToken, resolve, reject };
       try {
         worker.postMessage({
           type: 'generate',
