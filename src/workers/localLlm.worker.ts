@@ -225,7 +225,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 
       const temperature = msg.temperature ?? 0.2;
       const output = await generator(msg.messages, {
-        max_new_tokens: msg.maxNewTokens ?? 512,
+        max_new_tokens: msg.maxNewTokens ?? 192,
         do_sample: temperature > 0.05,
         ...(temperature > 0.05 ? { temperature } : {}),
         streamer,
