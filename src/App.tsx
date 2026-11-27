@@ -58,6 +58,30 @@ import {
 
 const THEME_STORAGE_KEY = 'cairn_theme_v1';
 const SETTINGS_STORAGE_KEY = 'cairn_ai_settings_v1';
+const ENGINE_STORAGE_KEY = 'cairn_selected_ai_engine_v1';
+const DEFAULT_BROWSER_ENGINE: AiEngineId =
+  'onnx-community/Qwen2.5-Coder-0.5B-Instruct';
+
+function loadInitialSelectedEngine(): AiEngineId {
+  if (typeof window === 'undefined') return DEFAULT_BROWSER_ENGINE;
+  try {
+    const saved = window.localStorage.getItem(ENGINE_STORAGE_KEY);
+    if (saved && LOCAL_AI_MODELS.some((model) => model.id === saved)) {
+      return saved as AiEngineId;
+    }
+
+    const cached = getCachedNeuralModelIds();
+    const preferredCached = [
+      'onnx-community/Qwen2.5-Coder-0.5B-Instruct',
+      'onnx-community/Qwen2.5-Coder-1.5B-Instruct',
+      'onnx-community/Qwen2.5-Coder-7B-Instruct',
+    ];
+    const cachedModel = preferredCached.find((modelId) => cached.includes(modelId));
+    return (cachedModel as AiEngineId | undefined) ?? DEFAULT_BROWSER_ENGINE;
+  } catch {
+    return DEFAULT_BROWSER_ENGINE;
+  }
+}
 
 function loadInitialAiSettings(): AiSettings {
   if (typeof window === 'undefined') return DEFAULT_AI_SETTINGS;
@@ -92,9 +116,10 @@ export default function App() {
     return saved === 'dark' ? 'dark' : 'light';
   });
 
-  // On-device AI engine state (defaults to Qwen 2.5 Coder 7B local Ollama with seamless Edge AI fallback)
+  // Start with a lightweight Qwen model suitable for CPU/WASM machines.
+  // Keep the user's engine selection between desktop sessions.
   const [selectedEngine, setSelectedEngine] = useState<AiEngineId>(
-    'ollama:qwen2.5-coder:7b'
+    () => loadInitialSelectedEngine()
   );
   const [neuralStatus, setNeuralStatus] = useState<NeuralModelStatus>('idle');
   const [neuralProgress, setNeuralProgress] = useState(0);
@@ -166,6 +191,22 @@ export default function App() {
     return () => {
       bridge.dispose();
     };
+  }, []);
+
+  useEffect(() => {
+    if (selectedEngine === 'ollama:qwen2.5-coder:7b') {
+      void handleCheckOllama();
+      return;
+    }
+    if (
+      selectedEngine !== 'builtin-edge' &&
+      cachedModelIds.includes(selectedEngine)
+    ) {
+      setNeuralStatusMessage('Cached Qwen model found — loading it for offline use...');
+      llmBridgeRef.current?.loadModel(selectedEngine);
+    } else if (selectedEngine !== 'builtin-edge') {
+      setNeuralStatusMessage('Select Download & Cache Offline to install the lightweight Qwen model.');
+    }
   }, []);
 
   useEffect(() => {
@@ -311,6 +352,11 @@ export default function App() {
 
   const handleSelectEngine = (engineId: AiEngineId) => {
     setSelectedEngine(engineId);
+    try {
+      window.localStorage.setItem(ENGINE_STORAGE_KEY, engineId);
+    } catch {
+      // Engine selection still works for this session if storage is unavailable.
+    }
     setStatusError(null);
     if (engineId === 'builtin-edge') {
       setNeuralStatus('idle');
