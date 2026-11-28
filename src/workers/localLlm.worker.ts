@@ -28,7 +28,7 @@ type WorkerRequest =
 
 let loadedModelId: string | null = null;
 let generator: any = null;
-let activeBackend: 'webgpu' | 'wasm' = 'wasm';
+let activeBackend: 'wasm' = 'wasm';
 const stoppingCriteria = new InterruptableStoppingCriteria();
 
 let legacyCacheCleanup: Promise<void> | null = null;
@@ -61,18 +61,6 @@ async function removeLegacyModelCacheEntries(): Promise<void> {
     })();
   }
   await legacyCacheCleanup;
-}
-
-async function detectWebGpu(): Promise<boolean> {
-  try {
-    const nav = self.navigator as Navigator & {
-      gpu?: { requestAdapter: () => Promise<unknown | null> };
-    };
-    if (!nav.gpu) return false;
-    return Boolean(await nav.gpu.requestAdapter());
-  } catch {
-    return false;
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -112,7 +100,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         self.postMessage({
           type: 'ready',
           modelId: msg.modelId,
-          backend: activeBackend,
+          backend: 'wasm',
         });
         return;
       }
@@ -125,10 +113,6 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
       }
 
       await removeLegacyModelCacheEntries();
-      const hasWebGpu = await detectWebGpu();
-      const backends: Array<'webgpu' | 'wasm'> = hasWebGpu
-        ? ['webgpu', 'wasm']
-        : ['wasm'];
 
       const progressMap = new Map<string, number>();
       const onProgress = (info: {
@@ -149,56 +133,29 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         });
       };
 
-      let lastLoadError: unknown = null;
-      for (let index = 0; index < backends.length; index += 1) {
-        const backend = backends[index];
-        try {
-          self.postMessage({
-            type: 'status',
-            message:
-              backend === 'webgpu'
-                ? 'Connecting Qwen 3B with WebGPU...'
-                : hasWebGpu
-                  ? 'WebGPU is unavailable for this model; continuing with CPU/WASM...'
-                  : 'Loading Qwen 3B on CPU/WASM...',
-            progress: index === 0 ? 2 : 90,
-          });
+      // Use Q4 CPU/WASM consistently. Adapter detection alone does not prove
+      // that the installed GPU driver can execute this LLM reliably.
+      self.postMessage({
+        type: 'status',
+        message: 'Loading Qwen 3B with the stable CPU/WASM runtime...',
+        progress: 2,
+      });
 
-          const loaded = await pipeline('text-generation', msg.modelId, {
-            // Use the published Qwen 3B quantized ONNX Q4 weights.
-            dtype: 'q4',
-            device: backend,
-            progress_callback: onProgress,
-          });
+      const loaded = await pipeline('text-generation', msg.modelId, {
+        dtype: 'q4',
+        device: 'wasm',
+        progress_callback: onProgress,
+      });
 
-          generator = loaded;
-          loadedModelId = msg.modelId;
-          activeBackend = backend;
+      generator = loaded;
+      loadedModelId = msg.modelId;
+      activeBackend = 'wasm';
 
-          self.postMessage({
-            type: 'ready',
-            modelId: msg.modelId,
-            backend,
-          });
-          return;
-        } catch (error) {
-          lastLoadError = error;
-          generator = null;
-          loadedModelId = null;
-
-          if (index < backends.length - 1) {
-            self.postMessage({
-              type: 'status',
-              message: `WebGPU could not start Qwen 3B. Retrying with CPU/WASM: ${errorMessage(error)}`,
-              progress: 90,
-            });
-          }
-        }
-      }
-
-      throw new Error(
-        `Unable to load ${msg.modelId}. ${errorMessage(lastLoadError)}`
-      );
+      self.postMessage({
+        type: 'ready',
+        modelId: msg.modelId,
+        backend: 'wasm',
+      });
     } catch (error) {
       await disposeCurrentGenerator();
       self.postMessage({
