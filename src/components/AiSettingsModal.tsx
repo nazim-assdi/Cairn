@@ -409,10 +409,13 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
                   }
                   className="w-full px-2.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 tabular-nums"
                 >
-                  <option value={192}>192 tokens (Short)</option>
-                  <option value={384}>384 tokens (Standard)</option>
-                  <option value={768}>768 tokens (Long answers)</option>
-                  <option value={1536}>1,536 tokens (Long code / reports)</option>
+                  <option value={192}>192 tokens (Short cap)</option>
+                  <option value={384}>384 tokens</option>
+                  <option value={512}>512 tokens</option>
+                  <option value={768}>768 tokens</option>
+                  <option value={1024}>1,024 tokens (Default ceiling)</option>
+                  <option value={1536}>1,536 tokens</option>
+                  <option value={2048}>2,048 tokens (Long reports)</option>
                 </select>
               </div>
             </div>
