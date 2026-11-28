@@ -156,9 +156,12 @@ export const AI_PERSONAS: AiPersonaPreset[] = [
   },
 ];
 
+export type AiResponseMode = 'fast' | 'balanced' | 'thinking';
+
 export interface AiSettings {
   personaId: AiPersonaId;
   systemPrompt: string;
+  responseMode: AiResponseMode;
   temperature: number;
   maxTokens: number;
   customOllamaModel: string;
@@ -167,8 +170,9 @@ export interface AiSettings {
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   personaId: 'assistant',
   systemPrompt: AI_PERSONAS[0].systemPrompt,
+  responseMode: 'fast',
   temperature: 0.3,
-  maxTokens: 192,
+  maxTokens: 384,
   customOllamaModel: 'qwen2.5-coder:7b',
 };
 
