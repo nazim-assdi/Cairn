@@ -179,6 +179,14 @@ async function createWindow() {
     },
   });
 
+  // Use the icon embedded in the packaged Cairn executable for the Windows taskbar.
+  if (process.platform === 'win32') {
+    mainWindow.setAppDetails({
+      appId: 'com.ntech.cairn',
+      appIconPath: process.execPath,
+    });
+  }
+
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
   });
