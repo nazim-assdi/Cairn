@@ -67,7 +67,8 @@
           ]
         }
       ],
-      "artifactName": "Cairn-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Cairn-Setup-${version}-${arch}.${ext}",
+      "icon": "build/icon.svg"
     },
     "nsis": {
       "oneClick": false,
