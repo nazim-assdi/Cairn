@@ -88,7 +88,21 @@ function loadInitialAiSettings(): AiSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) return DEFAULT_AI_SETTINGS;
-    return { ...DEFAULT_AI_SETTINGS, ...JSON.parse(raw) };
+    const saved = JSON.parse(raw) as Partial<AiSettings>;
+    return {
+      ...DEFAULT_AI_SETTINGS,
+      ...saved,
+      responseMode:
+        saved.responseMode === 'balanced' || saved.responseMode === 'thinking'
+          ? saved.responseMode
+          : 'fast',
+      // Older releases used 192 as the default ceiling. Raise that legacy
+      // default so Thinking mode can actually use its longer response budget.
+      maxTokens:
+        saved.responseMode === undefined && saved.maxTokens === 192
+          ? 1024
+          : saved.maxTokens ?? DEFAULT_AI_SETTINGS.maxTokens,
+    };
   } catch {
     return DEFAULT_AI_SETTINGS;
   }
@@ -102,10 +116,10 @@ function getFastResponseTokenBudget(query: string, settings: AiSettings): number
   const mode = settings.responseMode ?? 'fast';
   const target =
     mode === 'fast'
-      ? codeHeavy ? 112 : 72
+      ? codeHeavy ? 160 : 96
       : mode === 'thinking'
-        ? codeHeavy ? 384 : 320
-        : codeHeavy ? 256 : 176;
+        ? codeHeavy ? 512 : 384
+        : codeHeavy ? 320 : 192;
   const configured = Number.isFinite(settings.maxTokens) && settings.maxTokens > 0
     ? settings.maxTokens
     : 384;
@@ -565,7 +579,12 @@ export default function App() {
     if (useOllama) {
       setIsGenerating(true);
       setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, getRetrievalLimit(aiSettings.responseMode));
+      const rag = retrieveContextForQuery(
+        query,
+        selectedDocs,
+        allChunks,
+        getRetrievalLimit(aiSettings.responseMode)
+      );
       const llmMessages = buildLlmMessages(
         query,
         priorHistory,
