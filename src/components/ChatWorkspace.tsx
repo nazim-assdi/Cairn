@@ -27,6 +27,7 @@ import {
 import {
   AI_PERSONAS,
   AiEngineId,
+  AiResponseMode,
   AiSettings,
   ChatMessage,
   CitationRef,
@@ -62,6 +63,7 @@ interface ChatWorkspaceProps {
   ollamaModels: string[];
   aiSettings: AiSettings;
   onOpenSettings: () => void;
+  onChangeResponseMode: (mode: AiResponseMode) => void;
   onSelectEngine: (engineId: AiEngineId) => void;
   onLoadNeuralModel: (engineId: AiEngineId) => void;
   onStopGeneration: () => void;
@@ -146,6 +148,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   ollamaModels,
   aiSettings,
   onOpenSettings,
+  onChangeResponseMode,
   onSelectEngine,
   onLoadNeuralModel,
   onStopGeneration,
@@ -427,6 +430,23 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 </span>
               </button>
             )}
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <label htmlFor="chat-response-mode" className="sr-only">
+                Response mode
+              </label>
+              <select
+                id="chat-response-mode"
+                aria-label="Response mode"
+                value={aiSettings.responseMode ?? 'fast'}
+                onChange={(e) => onChangeResponseMode(e.target.value as AiResponseMode)}
+                className="text-xs font-semibold text-slate-800 dark:text-slate-100 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 rounded-md px-2.5 py-1 cursor-pointer"
+              >
+                <option value="fast">⚡ Fast</option>
+                <option value="balanced">Balanced</option>
+                <option value="thinking">Thinking</option>
+              </select>
+            </div>
 
             <button
               type="button"
