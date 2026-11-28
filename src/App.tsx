@@ -94,16 +94,26 @@ function loadInitialAiSettings(): AiSettings {
   }
 }
 
-function getFastResponseTokenBudget(query: string, configuredMax: number): number {
+function getFastResponseTokenBudget(query: string, settings: AiSettings): number {
   const normalized = query.toLowerCase();
   const codeHeavy =
     /\b(code|coding|program|function|component|debug|implement|build|script|typescript|javascript|python|sql|write tests)\b/.test(normalized) ||
     /কোড|প্রোগ্রাম|ফাংশন|ডিবাগ|তৈরি কর|লিখে দাও/.test(normalized);
-  const target = codeHeavy ? 224 : query.trim().length > 100 ? 160 : 96;
-  const configured = Number.isFinite(configuredMax) && configuredMax > 0
-    ? configuredMax
-    : 192;
-  return Math.max(64, Math.min(configured, target));
+  const mode = settings.responseMode ?? 'fast';
+  const target =
+    mode === 'fast'
+      ? codeHeavy ? 112 : 72
+      : mode === 'thinking'
+        ? codeHeavy ? 384 : 320
+        : codeHeavy ? 256 : 176;
+  const configured = Number.isFinite(settings.maxTokens) && settings.maxTokens > 0
+    ? settings.maxTokens
+    : 384;
+  return Math.max(48, Math.min(configured, target));
+}
+
+function getRetrievalLimit(mode: AiSettings['responseMode']): number {
+  return mode === 'fast' ? 2 : mode === 'thinking' ? 5 : 3;
 }
 
 export default function App() {
@@ -555,13 +565,14 @@ export default function App() {
     if (useOllama) {
       setIsGenerating(true);
       setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 3);
+      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, getRetrievalLimit(aiSettings.responseMode));
       const llmMessages = buildLlmMessages(
         query,
         priorHistory,
         rag.contextBlock,
         selectedDocs,
-        aiSettings.systemPrompt
+        aiSettings.systemPrompt,
+        aiSettings.responseMode
       );
       if (attachments && attachments.length > 0 && llmMessages.length > 0) {
         const encodedImages = attachments
@@ -594,7 +605,7 @@ export default function App() {
           model: targetModel,
           messages: llmMessages,
           temperature: aiSettings.temperature,
-          maxTokens: getFastResponseTokenBudget(query, aiSettings.maxTokens),
+          maxTokens: getFastResponseTokenBudget(query, aiSettings),
           onToken: (partial) => setStreamingText(partial),
           signal: controller.signal,
         });
@@ -645,13 +656,14 @@ export default function App() {
     if (useBrowserNeural) {
       setIsGenerating(true);
       setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, 3);
+      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, getRetrievalLimit(aiSettings.responseMode));
       const llmMessages = buildLlmMessages(
         query,
         priorHistory,
         rag.contextBlock,
         selectedDocs,
-        aiSettings.systemPrompt
+        aiSettings.systemPrompt,
+        aiSettings.responseMode
       );
       const engineLabel =
         LOCAL_AI_MODELS.find((m) => m.id === selectedEngine)?.label ||
@@ -662,7 +674,7 @@ export default function App() {
           llmMessages,
           (partial) => setStreamingText(partial),
           {
-            maxNewTokens: getFastResponseTokenBudget(query, aiSettings.maxTokens),
+            maxNewTokens: getFastResponseTokenBudget(query, aiSettings),
             temperature: aiSettings.temperature,
           }
         );
