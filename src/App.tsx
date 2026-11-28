@@ -1204,6 +1204,9 @@ export default function App() {
                 ollamaModels={ollamaModels}
                 aiSettings={aiSettings}
                 onOpenSettings={() => setSettingsModalOpen(true)}
+                onChangeResponseMode={(responseMode) =>
+                  handleSaveSettings({ ...aiSettings, responseMode })
+                }
                 onSelectEngine={handleSelectEngine}
                 onLoadNeuralModel={handleLoadNeuralModel}
                 onStopGeneration={handleStopGeneration}
