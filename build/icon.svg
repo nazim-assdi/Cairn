@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14e9f3"/><stop offset=".52" stop-color="#168dff"/><stop offset="1" stop-color="#8b4dff"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1=".1" y1="0" x2=".9" y2="1">
+      <stop offset="0" stop-color="#a4fff0"/><stop offset=".24" stop-color="#16e3e9"/>
+      <stop offset=".52" stop-color="#0877ff"/><stop offset=".78" stop-color="#3446f5"/>
+      <stop offset="1" stop-color="#b34cff"/>
+    </linearGradient>
+    <linearGradient id="ribbonShade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#09e9e9"/><stop offset=".48" stop-color="#087bff"/><stop offset="1" stop-color="#a334ff"/>
+    </linearGradient>
+    <linearGradient id="paper" x1=".15" y1="0" x2=".9" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".56" stop-color="#e7f4ff"/><stop offset="1" stop-color="#a8caff"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#238dff"/><stop offset="1" stop-color="#6047ef"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#00dff4" stop-opacity=".24"/><stop offset="1" stop-color="#00dff4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="28" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="170%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="22" result="blur"/>
+      <feOffset dy="18" result="offset"/><feComponentTransfer><feFuncA type="linear" slope=".42"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="paperShadow" x="-30%" y="-30%" width="170%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" result="blur"/>
+      <feOffset dy="14" result="offset"/><feComponentTransfer><feFuncA type="linear" slope=".28"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="round"><rect width="1024" height="1024" rx="214"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect width="1024" height="1024" fill="#050d2b"/>
+    <circle cx="500" cy="470" r="520" fill="url(#halo)"/>
+    <rect x="12" y="12" width="1000" height="1000" rx="202" fill="none" stroke="url(#frame)" stroke-width="13"/>
+    <rect x="29" y="29" width="966" height="966" rx="188" fill="none" stroke="#6ccfff" stroke-opacity=".1" stroke-width="3"/>
+    <path d="M699 165 C570 90 403 113 294 216 C152 350 145 571 282 725 C419 878 658 868 820 705 L729 617 C627 723 477 727 374 626 C280 533 283 390 376 303 C465 219 584 232 659 296 Z"
+      fill="url(#ribbon)" stroke="#8dfdff" stroke-opacity=".55" stroke-width="9" filter="url(#shadow)"/>
+    <path d="M368 303 C446 242 556 239 632 286 C576 260 515 278 469 321 C381 404 380 526 454 608 C515 675 613 681 691 632 C610 728 466 725 374 626 C280 533 283 390 368 303 Z"
+      fill="#041232" opacity=".82"/>
+    <path d="M272 704 C376 824 592 858 758 742 C809 707 848 666 877 618"
+      fill="none" stroke="url(#ribbonShade)" stroke-width="42" stroke-linecap="round" opacity=".92" filter="url(#softGlow)"/>
+    <path d="M120 727 C73 797 127 860 228 857 C352 853 479 791 612 738 C743 687 868 641 901 549"
+      fill="none" stroke="url(#frame)" stroke-width="18" stroke-linecap="round" filter="url(#softGlow)"/>
+    <path d="M150 733 C119 792 171 824 247 820 C365 814 477 759 614 705 C735 657 846 611 884 554"
+      fill="none" stroke="#7ffcff" stroke-opacity=".82" stroke-width="6" stroke-linecap="round"/>
+    <path d="M466 354 L498 435 L580 467 L498 500 L466 582 L434 500 L352 467 L434 435 Z"
+      fill="#b7ffff" filter="url(#softGlow)"/>
+    <path d="M466 385 L489 445 L549 467 L489 489 L466 549 L443 489 L383 467 L443 445 Z"
+      fill="#f4ffff"/>
+    <path d="M580 408 L593 443 L628 456 L593 469 L580 504 L567 469 L532 456 L567 443 Z"
+      fill="#5ff9ff" opacity=".9"/>
+    <g filter="url(#paperShadow)" transform="rotate(-4 700 635)">
+      <path d="M610 444 Q610 414 640 414 H794 L883 503 V781 Q883 811 853 811 H640 Q610 811 610 781 Z"
+        fill="url(#paper)" stroke="#ffffff" stroke-width="9"/>
+      <path d="M794 414 V478 Q794 503 819 503 H883" fill="#d8edff" stroke="#ffffff" stroke-width="8" stroke-linejoin="round"/>
+      <path d="M794 414 L883 503 H819 Q794 503 794 478 Z" fill="#ffffff" opacity=".96"/>
+      <rect x="658" y="568" width="164" height="27" rx="13.5" fill="url(#line)"/>
+      <rect x="658" y="626" width="186" height="27" rx="13.5" fill="url(#line)" opacity=".92"/>
+      <rect x="658" y="684" width="151" height="27" rx="13.5" fill="url(#line)" opacity=".86"/>
+    </g>
+    <path d="M781 331 C845 296 908 322 917 368" fill="none" stroke="#24d9ff" stroke-width="10" stroke-linecap="round" opacity=".7" filter="url(#softGlow)"/>
+  </g>
+</svg>
