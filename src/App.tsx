@@ -130,6 +130,11 @@ function getRetrievalLimit(mode: AiSettings['responseMode']): number {
   return mode === 'fast' ? 2 : mode === 'thinking' ? 5 : 3;
 }
 
+function getResponseTemperature(settings: AiSettings): number {
+  // Greedy decoding avoids sampling overhead and gives repeatable Fast-mode answers.
+  return settings.responseMode === 'fast' ? 0 : settings.temperature;
+}
+
 export default function App() {
   const [documents, setDocuments] = useState<VaultDocument[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -623,7 +628,7 @@ export default function App() {
           baseUrl: ollamaUrl,
           model: targetModel,
           messages: llmMessages,
-          temperature: aiSettings.temperature,
+          temperature: getResponseTemperature(aiSettings),
           maxTokens: getFastResponseTokenBudget(query, aiSettings),
           onToken: (partial) => setStreamingText(partial),
           signal: controller.signal,
@@ -694,7 +699,7 @@ export default function App() {
           (partial) => setStreamingText(partial),
           {
             maxNewTokens: getFastResponseTokenBudget(query, aiSettings),
-            temperature: aiSettings.temperature,
+            temperature: getResponseTemperature(aiSettings),
           }
         );
         const assistantMsg: ChatMessage = {
