@@ -430,33 +430,47 @@ export function buildLlmMessages(
   history: ChatMessage[],
   contextBlock: string,
   selectedDocs: VaultDocument[],
-  customSystemPrompt?: string
+  customSystemPrompt?: string,
+  responseMode: 'fast' | 'balanced' | 'thinking' = 'balanced'
 ): { role: 'system' | 'user' | 'assistant'; content: string; images?: string[] }[] {
   const docNames = selectedDocs.map((d) => d.name).join(', ') || 'None selected';
   const baseIdentity =
     customSystemPrompt?.trim() ||
     'You are Cairn, a private offline AI assistant running locally on the user device. Answer clearly, directly, and conversationally. Respond in the same language or style the user uses when appropriate.';
 
-  // Keep the prompt compact: long histories and document extracts slow CPU inference.
+  // Different modes control prompt prefill cost as well as output length.
+  const contextLimit =
+    responseMode === 'fast' ? 900 : responseMode === 'thinking' ? 3600 : 2200;
+  const historyCount =
+    responseMode === 'fast' ? 2 : responseMode === 'thinking' ? 6 : 4;
+  const historyCharLimit =
+    responseMode === 'fast' ? 360 : responseMode === 'thinking' ? 1000 : 650;
   const compactContextBlock =
-    contextBlock.length > 2200
-      ? `${contextBlock.slice(0, 2200)}\n[Additional document text omitted to keep local replies fast.]`
+    contextBlock.length > contextLimit
+      ? `${contextBlock.slice(0, contextLimit)}\n[Additional document text omitted for this response mode.]`
       : contextBlock;
+
+  const modeInstruction =
+    responseMode === 'fast'
+      ? 'FAST MODE: prioritize a quick, direct answer. Use a few concise sentences, skip lengthy background, and ask only one essential follow-up when needed.'
+      : responseMode === 'thinking'
+        ? 'THINKING MODE: carefully analyze the problem, check assumptions and edge cases, and solve it before answering. Do not reveal private chain-of-thought or hidden deliberation. Give the conclusion with a concise explanation, key steps, and important caveats.'
+        : 'BALANCED MODE: provide a clear, useful answer with enough explanation but avoid unnecessary detail.';
 
   const systemPrompt = [
     baseIdentity,
+    modeInstruction,
     compactContextBlock
       ? `Active local documents (${docNames}):\n${compactContextBlock}\n\nGround factual claims about the files in these sources and cite them like [Source 1].`
       : 'No local documents matched or loaded. Answer helpfully as a general offline AI assistant.',
   ].join('\n\n');
 
-  // Only the latest two exchanges are useful for most follow-up prompts.
   const recentTurns = history
     .filter((m) => m.intent !== 'media')
-    .slice(-4)
+    .slice(-historyCount)
     .map((m) => ({
       role: m.role as 'user' | 'assistant',
-      content: m.content.slice(0, 650),
+      content: m.content.slice(0, historyCharLimit),
     }));
 
   return [
