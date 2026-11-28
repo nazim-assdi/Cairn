@@ -251,6 +251,61 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
             )}
           </section>
 
+          {/* Response speed and reasoning depth */}
+          <section className="space-y-2.5">
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                Response Mode
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Choose how quickly Cairn answers and how much analysis it spends on difficult questions.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {([
+                {
+                  id: 'fast',
+                  label: 'Fast',
+                  detail: 'Quick replies · shortest output',
+                },
+                {
+                  id: 'balanced',
+                  label: 'Balanced',
+                  detail: 'More context · everyday use',
+                },
+                {
+                  id: 'thinking',
+                  label: 'Thinking',
+                  detail: 'Deeper analysis · slower',
+                },
+              ] as const).map((mode) => {
+                const selected = (draft.responseMode ?? 'fast') === mode.id;
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() =>
+                      setDraft((prev) => ({ ...prev, responseMode: mode.id }))
+                    }
+                    className={`text-left p-3 rounded-lg border transition-colors cursor-pointer ${
+                      selected
+                        ? 'bg-teal-50 dark:bg-teal-950/50 border-teal-600 dark:border-teal-500'
+                        : 'bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      {mode.label}
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
+                      {mode.detail}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
           {/* Persona Presets */}
           <section className="space-y-2.5">
             <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -354,9 +409,10 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
                   }
                   className="w-full px-2.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 tabular-nums"
                 >
-                  <option value={512}>512 tokens (Fast)</option>
-                  <option value={1024}>1,024 tokens (Balanced)</option>
-                  <option value={2048}>2,048 tokens (Long Code / Reports)</option>
+                  <option value={192}>192 tokens (Short)</option>
+                  <option value={384}>384 tokens (Standard)</option>
+                  <option value={768}>768 tokens (Long answers)</option>
+                  <option value={1536}>1,536 tokens (Long code / reports)</option>
                 </select>
               </div>
             </div>
