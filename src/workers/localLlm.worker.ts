@@ -6,17 +6,15 @@ import {
 } from '@huggingface/transformers';
 import { QWEN_MODEL_ID } from '../types/workspace';
 
-// Transformers.js keeps model files in the browser Cache Storage so the
-// same model can be loaded again without a network connection.
+// Keep model files in persistent browser Cache Storage across app launches.
 env.allowLocalModels = false;
 env.useBrowserCache = true;
-// Enable SIMD kernels when the ONNX WASM backend exposes the optional setting.
 if (env.backends.onnx.wasm) {
   env.backends.onnx.wasm.simd = true;
 }
 
 type WorkerRequest =
-  | { type: 'load'; modelId: string }
+  | { type: 'load'; modelId: string; backend?: 'auto' | 'wasm' }
   | {
       type: 'generate';
       requestId: string;
@@ -28,7 +26,7 @@ type WorkerRequest =
 
 let loadedModelId: string | null = null;
 let generator: any = null;
-let activeBackend: 'wasm' = 'wasm';
+let activeBackend: 'webgpu' | 'wasm' = 'wasm';
 const stoppingCriteria = new InterruptableStoppingCriteria();
 
 let legacyCacheCleanup: Promise<void> | null = null;
@@ -56,7 +54,7 @@ async function removeLegacyModelCacheEntries(): Promise<void> {
           );
         }
       } catch {
-        // Old model cache cleanup is best-effort.
+        // Legacy model cleanup is best-effort.
       }
     })();
   }
@@ -73,17 +71,56 @@ function errorMessage(error: unknown): string {
   }
 }
 
-async function disposeCurrentGenerator(): Promise<void> {
-  const current = generator;
-  generator = null;
-  loadedModelId = null;
-  if (current && typeof current.dispose === 'function') {
-    try {
-      await current.dispose();
-    } catch {
-      // Releasing the worker below also releases any remaining runtime memory.
-    }
+async function hasWebGpuAdapter(): Promise<boolean> {
+  try {
+    const nav = self.navigator as Navigator & {
+      gpu?: { requestAdapter: () => Promise<unknown | null> };
+    };
+    if (!nav.gpu) return false;
+    return Boolean(await nav.gpu.requestAdapter());
+  } catch {
+    return false;
   }
+}
+
+function announceWebGpuFallback(reason: string, requestId?: string): void {
+  self.postMessage({
+    type: 'fallback',
+    reason,
+    requestId,
+  });
+}
+
+async function loadQwenWithWasm(
+  modelId: string,
+  onProgress: (info: { status?: string; file?: string; progress?: number }) => void
+): Promise<void> {
+  self.postMessage({
+    type: 'status',
+    message: 'WebGPU is unavailable or failed its test. Switching to CPU/WASM...',
+    progress: 90,
+  });
+
+  const loaded = await pipeline('text-generation', modelId, {
+    dtype: 'q4',
+    device: 'wasm',
+    progress_callback: onProgress,
+  });
+
+  // A one-token smoke test verifies the runtime before the UI reports Ready.
+  await loaded(
+    [{ role: 'user', content: 'Reply with OK.' }],
+    { max_new_tokens: 1, do_sample: false }
+  );
+
+  generator = loaded;
+  loadedModelId = modelId;
+  activeBackend = 'wasm';
+  self.postMessage({
+    type: 'ready',
+    modelId,
+    backend: 'wasm',
+  });
 }
 
 self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
@@ -100,14 +137,18 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         self.postMessage({
           type: 'ready',
           modelId: msg.modelId,
-          backend: 'wasm',
+          backend: activeBackend,
         });
         return;
       }
 
-      await disposeCurrentGenerator();
-      stoppingCriteria.reset();
+      // Each worker owns one runtime. Switching providers is done by the
+      // bridge terminating this worker and creating a fresh worker.
+      if (generator) {
+        throw new Error('The local model worker must be restarted before changing runtime.');
+      }
 
+      stoppingCriteria.reset();
       if (msg.modelId !== QWEN_MODEL_ID) {
         throw new Error('Cairn supports only the Qwen 2.5 Coder 3B model.');
       }
@@ -133,31 +174,55 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         });
       };
 
-      // Use Q4 CPU/WASM consistently. Adapter detection alone does not prove
-      // that the installed GPU driver can execute this LLM reliably.
-      self.postMessage({
-        type: 'status',
-        message: 'Loading Qwen 3B with the stable CPU/WASM runtime...',
-        progress: 2,
-      });
+      if (msg.backend !== 'wasm') {
+        const supported = await hasWebGpuAdapter();
+        if (!supported) {
+          announceWebGpuFallback('No compatible WebGPU adapter was found.');
+          return;
+        }
 
-      const loaded = await pipeline('text-generation', msg.modelId, {
-        dtype: 'q4',
-        device: 'wasm',
-        progress_callback: onProgress,
-      });
+        try {
+          self.postMessage({
+            type: 'status',
+            message: 'Testing Qwen 3B on WebGPU...',
+            progress: 2,
+          });
 
-      generator = loaded;
-      loadedModelId = msg.modelId;
-      activeBackend = 'wasm';
+          const gpuGenerator = await pipeline('text-generation', msg.modelId, {
+            dtype: 'q4',
+            device: 'webgpu',
+            progress_callback: onProgress,
+          });
 
-      self.postMessage({
-        type: 'ready',
-        modelId: msg.modelId,
-        backend: 'wasm',
-      });
+          // Do not declare GPU Ready based on adapter detection alone.
+          // Run a real inference before exposing this backend to chat.
+          await gpuGenerator(
+            [{ role: 'user', content: 'Reply with OK.' }],
+            { max_new_tokens: 1, do_sample: false }
+          );
+
+          generator = gpuGenerator;
+          loadedModelId = msg.modelId;
+          activeBackend = 'webgpu';
+          self.postMessage({
+            type: 'ready',
+            modelId: msg.modelId,
+            backend: 'webgpu',
+          });
+          return;
+        } catch (error) {
+          // Do not call pipeline.dispose() here. A failed WebGPU runtime can
+          // leave a stale device reference in the worker. The bridge terminates
+          // this worker and starts a clean WASM worker instead.
+          announceWebGpuFallback(errorMessage(error));
+          return;
+        }
+      }
+
+      await loadQwenWithWasm(msg.modelId, onProgress);
     } catch (error) {
-      await disposeCurrentGenerator();
+      generator = null;
+      loadedModelId = null;
       self.postMessage({
         type: 'error',
         error: errorMessage(error),
@@ -171,37 +236,37 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
       self.postMessage({
         type: 'gen-error',
         requestId: msg.requestId,
-        error: 'The Qwen model is not loaded. Load the cached model from AI Settings first.',
+        error: 'The Qwen model is not loaded. Wait for the model runtime to become Ready.',
       });
       return;
     }
 
+    let accumulated = '';
+    let pendingText = '';
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushStream = () => {
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (!pendingText) return;
+      const chunk = pendingText;
+      pendingText = '';
+      self.postMessage({
+        type: 'token',
+        requestId: msg.requestId,
+        text: chunk,
+      });
+    };
+
     try {
       stoppingCriteria.reset();
-      let accumulated = '';
-      let pendingText = '';
-      let flushTimer: ReturnType<typeof setTimeout> | null = null;
-      const flushStream = () => {
-        if (flushTimer !== null) {
-          clearTimeout(flushTimer);
-          flushTimer = null;
-        }
-        if (!pendingText) return;
-        const chunk = pendingText;
-        pendingText = '';
-        self.postMessage({
-          type: 'token',
-          requestId: msg.requestId,
-          text: chunk,
-        });
-      };
       const streamer = new TextStreamer(generator.tokenizer, {
         skip_prompt: true,
         skip_special_tokens: true,
         callback_function: (text: string) => {
           accumulated += text;
           pendingText += text;
-          // Batch tiny token events so the UI does not re-render for every token.
           if (flushTimer === null) {
             flushTimer = setTimeout(flushStream, 40);
           }
@@ -238,6 +303,16 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         text: finalText,
       });
     } catch (error) {
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (activeBackend === 'webgpu') {
+        // Preserve the pending prompt in the bridge; it will be replayed once
+        // on a fresh WASM worker after this GPU worker is terminated.
+        announceWebGpuFallback(errorMessage(error), msg.requestId);
+        return;
+      }
       self.postMessage({
         type: 'gen-error',
         requestId: msg.requestId,
