@@ -26,7 +26,6 @@ import {
 } from 'lucide-react';
 import {
   AI_PERSONAS,
-  AiEngineId,
   AiResponseMode,
   AiSettings,
   ChatMessage,
@@ -34,10 +33,8 @@ import {
   ComposerMode,
   ImageAttachment,
   ImageStylePreset,
-  LOCAL_AI_MODELS,
   MediaArtifact,
   NeuralModelStatus,
-  OllamaStatus,
   VaultDocument,
   VideoStylePreset,
 } from '../types/workspace';
@@ -54,18 +51,13 @@ interface ChatWorkspaceProps {
   generationLabel: string;
   livePreviewFrame: string | null;
   streamingText: string | null;
-  selectedEngine: AiEngineId;
   neuralStatus: NeuralModelStatus;
   neuralProgress: number;
   neuralStatusMessage: string;
-  cachedModelIds: string[];
-  ollamaStatus: OllamaStatus;
-  ollamaModels: string[];
+  onRetryModel: () => void;
   aiSettings: AiSettings;
   onOpenSettings: () => void;
   onChangeResponseMode: (mode: AiResponseMode) => void;
-  onSelectEngine: (engineId: AiEngineId) => void;
-  onLoadNeuralModel: (engineId: AiEngineId) => void;
   onStopGeneration: () => void;
   onSendQuery: (query: string, attachments?: ImageAttachment[]) => void;
   onEditUserMessage: (messageId: string, newContent: string) => void;
@@ -139,18 +131,13 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   generationLabel,
   livePreviewFrame,
   streamingText,
-  selectedEngine,
   neuralStatus,
   neuralProgress,
   neuralStatusMessage,
-  cachedModelIds,
-  ollamaStatus,
-  ollamaModels,
+  onRetryModel,
   aiSettings,
   onOpenSettings,
   onChangeResponseMode,
-  onSelectEngine,
-  onLoadNeuralModel,
   onStopGeneration,
   onSendQuery,
   onEditUserMessage,
@@ -201,10 +188,6 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
   const speechSynthSupported =
     typeof window !== 'undefined' && 'speechSynthesis' in window;
-
-  const activeModelSpec =
-    LOCAL_AI_MODELS.find((m) => m.id === selectedEngine) ?? LOCAL_AI_MODELS[0];
-  const isNeuralCached = cachedModelIds.includes(selectedEngine);
 
   const handleCopyMessage = async (msg: ChatMessage) => {
     try {
@@ -396,38 +379,13 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       <div className="px-4 sm:px-6 py-2.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shrink-0 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
-            <Cpu className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400 shrink-0" aria-hidden="true" />
-            <label htmlFor="local-ai-engine-select" className="sr-only">
-              Select on-device AI engine
-            </label>
-            <select
-              id="local-ai-engine-select"
-              value={selectedEngine}
-              onChange={(e) => onSelectEngine(e.target.value as AiEngineId)}
-              className="text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-1 max-w-xs"
-            >
-              {LOCAL_AI_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label} · {m.sizeLabel}
-                </option>
-              ))}
-            </select>
-
-            {activeModelSpec.runtime === 'browser-llm' && neuralStatus !== 'ready' && (
-              <button
-                type="button"
-                disabled={neuralStatus === 'loading'}
-                onClick={() => onLoadNeuralModel(selectedEngine)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 dark:bg-teal-600 dark:hover:bg-teal-500 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
-              >
-                <Download className="w-3 h-3" aria-hidden="true" />
-                <span>
-                  {neuralStatus === 'loading'
-                    ? `Loading ${neuralProgress}%`
-                    : isNeuralCached
-                    ? 'Load Cached Model'
-                    : 'Download & Cache Offline'}
-                </span>
+            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-900 dark:text-slate-100">
+              <Cpu className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" aria-hidden="true" />
+              <span>Qwen 2.5 Coder 3B</span>
+            </div>
+            {neuralStatus === 'error' && (
+              <button type="button" onClick={onRetryModel} className="px-2.5 py-1 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-md cursor-pointer">
+                Retry Qwen Download
               </button>
             )}
 
@@ -496,29 +454,12 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
           <span className="truncate">
-            {activeModelSpec.runtime === 'ollama'
-              ? ollamaStatus === 'connected'
-                ? `Connected · ${
-                    ollamaModels.some((m) =>
-                      m.toLowerCase().includes(aiSettings.customOllamaModel.toLowerCase())
-                    )
-                      ? `${aiSettings.customOllamaModel} active`
-                      : `${ollamaModels.length} local model(s) ready`
-                  }`
-                : `Built-in Edge AI active · ${
-                    selectedDocs.length === 0
-                      ? 'complete assistant mode'
-                      : `${selectedDocs.length} doc${selectedDocs.length > 1 ? 's' : ''} scoped`
-                  }`
-              : activeModelSpec.runtime === 'browser-llm'
-              ? neuralStatusMessage || activeModelSpec.description
-              : selectedDocs.length === 0
-              ? 'No documents selected · complete assistant mode'
-              : `Scope: ${
-                  selectedDocs.length === 1
-                    ? selectedDocs[0].name
-                    : `${selectedDocs.length} documents`
-                }`}
+            {neuralStatusMessage ||
+              (neuralStatus === 'ready'
+                ? 'Qwen 3B ready · saved offline model connected'
+                : neuralStatus === 'loading'
+                  ? 'Downloading or reconnecting to Qwen 3B...'
+                  : 'Qwen 3B is waiting for its automatic download')}
           </span>
           <span className="text-[11px] text-slate-400 dark:text-slate-500 whitespace-nowrap shrink-0">
             {activePersona.label} · temp {aiSettings.temperature.toFixed(2)}
@@ -527,7 +468,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       </div>
 
       {/* Neural Model Download / Initialization Progress Bar */}
-      {activeModelSpec.runtime === 'browser-llm' && neuralStatus === 'loading' && (
+      {neuralStatus === 'loading' && (
         <div className="px-4 sm:px-6 py-2 bg-teal-50/70 dark:bg-teal-950/40 border-b border-teal-100 dark:border-teal-900 shrink-0">
           <div className="max-w-3xl mx-auto space-y-1">
             <div className="flex items-center justify-between text-xs text-teal-900 dark:text-teal-200 tabular-nums">
@@ -557,7 +498,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                   Private offline AI, document analysis, and media synthesis
                 </h2>
                 <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Chat privately on-device with Qwen 2.5 Coder 7B or instant built-in Edge AI. Analyze PDF, DOCX, and TXT files with cited passages, write code, or synthesize PNG visuals, WAV audio, and WebM video inside one workspace.
+                  Chat privately on-device with the single automatic Qwen 2.5 Coder 3B model. Analyze PDF, DOCX, and TXT files with cited passages, write code, or synthesize PNG visuals, WAV audio, and WebM video inside one workspace.
                 </p>
               </div>
 
@@ -965,7 +906,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             <article className="rounded-lg bg-white dark:bg-slate-900 border border-teal-200 dark:border-teal-800 p-4 sm:p-5 space-y-3">
               <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
                 <span className="font-semibold text-teal-800 dark:text-teal-300">
-                  {activeModelSpec.label} (streaming locally)
+                  Qwen 2.5 Coder 3B (streaming locally)
                 </span>
                 <button
                   type="button"

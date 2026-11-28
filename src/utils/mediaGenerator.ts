@@ -5,7 +5,6 @@ import {
   VideoStylePreset,
 } from '../types/workspace';
 import { extractKeyMetrics, extractTopTerms } from './edgeEngine';
-import { generateOllamaSvgScene } from './ollamaClient';
 import { parseScenePrompt, renderCreativeSceneFrame } from './sceneRenderer';
 import { computeWaveformPeaks, synthesizeAcousticBriefing } from './wavEncoder';
 
@@ -61,47 +60,6 @@ export interface ImageGenerationInput {
   stylePreset: ImageStylePreset;
   aspectRatio?: '16:9' | '1:1';
   highlights?: string[];
-  ollamaConfig?: {
-    baseUrl: string;
-    model: string;
-    connected: boolean;
-  };
-}
-
-async function rasterizeSvgOntoCanvas(
-  svgMarkup: string,
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const svgBlob = new Blob([svgMarkup], {
-      type: 'image/svg+xml;charset=utf-8',
-    });
-    const url = URL.createObjectURL(svgBlob);
-    const img = new Image();
-    const timeout = window.setTimeout(() => {
-      URL.revokeObjectURL(url);
-      resolve(false);
-    }, 3000);
-    img.onload = () => {
-      window.clearTimeout(timeout);
-      try {
-        ctx.drawImage(img, 0, 0, width, height);
-        URL.revokeObjectURL(url);
-        resolve(true);
-      } catch {
-        URL.revokeObjectURL(url);
-        resolve(false);
-      }
-    };
-    img.onerror = () => {
-      window.clearTimeout(timeout);
-      URL.revokeObjectURL(url);
-      resolve(false);
-    };
-    img.src = url;
-  });
 }
 
 export async function generateLocalImageArtifact(
@@ -119,39 +77,13 @@ export async function generateLocalImageArtifact(
   const titleText = input.prompt.trim() || 'Private Edge Visual';
 
   if (input.stylePreset === 'artwork' || input.stylePreset === 'poster') {
-    let renderedByQwen = false;
-    const parsed = parseScenePrompt(titleText);
-    if (
-      input.ollamaConfig?.connected &&
-      input.stylePreset === 'artwork' &&
-      parsed.subjects.length === 0
-    ) {
-      const svgMarkup = await generateOllamaSvgScene({
-        baseUrl: input.ollamaConfig.baseUrl,
-        model: input.ollamaConfig.model,
-        prompt: titleText,
-        width,
-        height,
-      });
-      if (svgMarkup) {
-        renderedByQwen = await rasterizeSvgOntoCanvas(
-          svgMarkup,
-          ctx,
-          width,
-          height
-        );
-      }
-    }
-
-    if (!renderedByQwen) {
-      renderCreativeSceneFrame(ctx, width, height, {
-        prompt: titleText,
-        mode: input.stylePreset,
-        time: 0.35,
-        title: titleText,
-        subtitle: input.highlights?.[0],
-      });
-    }
+    renderCreativeSceneFrame(ctx, width, height, {
+      prompt: titleText,
+      mode: input.stylePreset,
+      time: 0.35,
+      title: titleText,
+      subtitle: input.highlights?.[0],
+    });
     const dataUrl = canvas.toDataURL('image/png');
     return {
       id: `media-img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,

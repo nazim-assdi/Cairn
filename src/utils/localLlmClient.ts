@@ -1,4 +1,4 @@
-import { AiEngineId, NeuralModelStatus } from '../types/workspace';
+import { AiEngineId, NeuralModelStatus, QWEN_MODEL_ID } from '../types/workspace';
 
 export interface LocalLlmStateEvent {
   status: NeuralModelStatus;
@@ -17,31 +17,10 @@ type WorkerOutMessage =
   | { type: 'done'; requestId: string; text: string }
   | { type: 'gen-error'; requestId: string; error: string };
 
-const CACHED_MODELS_KEY = 'cairn_cached_neural_models_v1';
-
-export function getCachedNeuralModelIds(): string[] {
-  try {
-    const raw = localStorage.getItem(CACHED_MODELS_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function markModelCached(modelId: string) {
-  try {
-    const existing = new Set(getCachedNeuralModelIds());
-    existing.add(modelId);
-    localStorage.setItem(CACHED_MODELS_KEY, JSON.stringify(Array.from(existing)));
-  } catch {
-    // Cache Storage itself remains the source of truth for model weights.
-  }
-}
-
 export class LocalLlmBridge {
   private worker: Worker | null = null;
   private onState: (event: LocalLlmStateEvent) => void;
-  private currentModelId: AiEngineId = 'builtin-edge';
+  private currentModelId: AiEngineId = QWEN_MODEL_ID;
   private readyModelId: AiEngineId | null = null;
   private activeGen: {
     requestId: string;
@@ -109,7 +88,6 @@ export class LocalLlmBridge {
         });
       } else if (msg.type === 'ready') {
         this.readyModelId = msg.modelId as AiEngineId;
-        markModelCached(msg.modelId);
         this.onState({
           status: 'ready',
           modelId: this.readyModelId,
@@ -160,18 +138,6 @@ export class LocalLlmBridge {
   }
 
   loadModel(modelId: AiEngineId) {
-    if (modelId === 'builtin-edge') {
-      this.currentModelId = 'builtin-edge';
-      this.readyModelId = 'builtin-edge';
-      this.onState({
-        status: 'ready',
-        modelId: 'builtin-edge',
-        progress: 100,
-        message: 'Instant Built-in Edge AI',
-      });
-      return;
-    }
-
     this.failActiveGeneration('The model was changed while a response was generating.');
     this.currentModelId = modelId;
     this.readyModelId = null;
@@ -196,7 +162,7 @@ export class LocalLlmBridge {
   ): Promise<string> {
     if (this.readyModelId !== this.currentModelId) {
       return Promise.reject(
-        new Error('The selected Qwen model is not loaded yet. Open AI Settings and load the cached model.')
+        new Error('Qwen 3B is still loading. Wait for the automatic download or cached-model connection to finish.')
       );
     }
 

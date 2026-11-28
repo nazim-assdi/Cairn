@@ -164,7 +164,6 @@ export interface AiSettings {
   responseMode: AiResponseMode;
   temperature: number;
   maxTokens: number;
-  customOllamaModel: string;
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -173,64 +172,10 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   responseMode: 'fast',
   temperature: 0.3,
   maxTokens: 1024,
-  customOllamaModel: 'qwen2.5-coder:7b',
 };
 
-export type AiEngineId =
-  | 'ollama:qwen2.5-coder:7b'
-  | 'onnx-community/Qwen2.5-Coder-7B-Instruct'
-  | 'onnx-community/Qwen2.5-Coder-1.5B-Instruct'
-  | 'onnx-community/Qwen2.5-Coder-0.5B-Instruct'
-  | 'builtin-edge';
-
-export interface LocalModelSpec {
-  id: AiEngineId;
-  label: string;
-  sizeLabel: string;
-  description: string;
-  runtime: 'ollama' | 'browser-llm' | 'builtin';
-  isLarge7B?: boolean;
-}
-
-export const LOCAL_AI_MODELS: LocalModelSpec[] = [
-  {
-    id: 'ollama:qwen2.5-coder:7b',
-    label: 'Qwen 2.5 Coder 7B (Local Ollama)',
-    sizeLabel: '4.7 GB · Offline Daemon',
-    description: 'Full 7B coding & document model running locally via Ollama',
-    runtime: 'ollama',
-    isLarge7B: true,
-  },
-  {
-    id: 'onnx-community/Qwen2.5-Coder-7B-Instruct',
-    label: 'Qwen 2.5 Coder 7B (Browser WebGPU)',
-    sizeLabel: '~4.5 GB · WebGPU',
-    description: 'Large browser model; requires a compatible WebGPU GPU with substantial dedicated memory',
-    runtime: 'browser-llm',
-    isLarge7B: true,
-  },
-  {
-    id: 'onnx-community/Qwen2.5-Coder-1.5B-Instruct',
-    label: 'Qwen 2.5 Coder 1.5B (On-Device)',
-    sizeLabel: '~950 MB cached',
-    description: 'Balanced browser coding model; WebGPU first with automatic CPU/WASM fallback',
-    runtime: 'browser-llm',
-  },
-  {
-    id: 'onnx-community/Qwen2.5-Coder-0.5B-Instruct',
-    label: 'Qwen 2.5 Coder 0.5B (On-Device)',
-    sizeLabel: '~380 MB cached',
-    description: 'Low-memory Qwen model; designed for CPU/WASM fallback and offline chat',
-    runtime: 'browser-llm',
-  },
-  {
-    id: 'builtin-edge',
-    label: 'Built-in Edge AI',
-    sizeLabel: 'Instant · 0 MB',
-    description: 'Zero-download local RAG, coding helpers, math & conversational AI',
-    runtime: 'builtin',
-  },
-];
+export const QWEN_MODEL_ID = 'onnx-community/Qwen2.5-Coder-3B-Instruct' as const;
+export type AiEngineId = typeof QWEN_MODEL_ID;
 
 export type NeuralModelStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type OllamaStatus = 'unchecked' | 'checking' | 'connected' | 'offline';

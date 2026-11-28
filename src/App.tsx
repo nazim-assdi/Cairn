@@ -6,25 +6,23 @@ import { MediaStudio } from './components/MediaStudio';
 import { SidebarVault } from './components/SidebarVault';
 import { TopBar } from './components/TopBar';
 import {
-  AiEngineId,
   AiSettings,
   ChatMessage,
   ChatSession,
   CitationRef,
   DEFAULT_AI_SETTINGS,
+  QWEN_MODEL_ID,
   ImageAttachment,
   ImageStylePreset,
-  LOCAL_AI_MODELS,
   MediaArtifact,
   MediaKind,
   NeuralModelStatus,
-  OllamaStatus,
   ThemeMode,
   VaultDocument,
   VideoStylePreset,
   WorkspaceTab,
 } from './types/workspace';
-import { parseSlashCommand, routeOfflineQuery } from './utils/assistantBrain';
+import { parseSlashCommand } from './utils/assistantBrain';
 import { inferMediaIntentFromPrompt } from './utils/sceneRenderer';
 import { parseLocalDocument } from './utils/documentParser';
 import {
@@ -34,8 +32,7 @@ import {
   detectNaturalMediaRequest,
   retrieveContextForQuery,
 } from './utils/edgeEngine';
-import { getCachedNeuralModelIds, LocalLlmBridge } from './utils/localLlmClient';
-import { probeLocalOllama, streamOllamaChat } from './utils/ollamaClient';
+import { LocalLlmBridge } from './utils/localLlmClient';
 import {
   deleteDocumentFromVault,
   deleteMediaFromVault,
@@ -58,31 +55,6 @@ import {
 
 const THEME_STORAGE_KEY = 'cairn_theme_v1';
 const SETTINGS_STORAGE_KEY = 'cairn_ai_settings_v1';
-const ENGINE_STORAGE_KEY = 'cairn_selected_ai_engine_v1';
-const DEFAULT_BROWSER_ENGINE: AiEngineId =
-  'onnx-community/Qwen2.5-Coder-0.5B-Instruct';
-
-function loadInitialSelectedEngine(): AiEngineId {
-  if (typeof window === 'undefined') return DEFAULT_BROWSER_ENGINE;
-  try {
-    const saved = window.localStorage.getItem(ENGINE_STORAGE_KEY);
-    if (saved && LOCAL_AI_MODELS.some((model) => model.id === saved)) {
-      return saved as AiEngineId;
-    }
-
-    const cached = getCachedNeuralModelIds();
-    const preferredCached = [
-      'onnx-community/Qwen2.5-Coder-0.5B-Instruct',
-      'onnx-community/Qwen2.5-Coder-1.5B-Instruct',
-      'onnx-community/Qwen2.5-Coder-7B-Instruct',
-    ];
-    const cachedModel = preferredCached.find((modelId) => cached.includes(modelId));
-    return (cachedModel as AiEngineId | undefined) ?? DEFAULT_BROWSER_ENGINE;
-  } catch {
-    return DEFAULT_BROWSER_ENGINE;
-  }
-}
-
 function loadInitialAiSettings(): AiSettings {
   if (typeof window === 'undefined') return DEFAULT_AI_SETTINGS;
   try {
@@ -90,18 +62,14 @@ function loadInitialAiSettings(): AiSettings {
     if (!raw) return DEFAULT_AI_SETTINGS;
     const saved = JSON.parse(raw) as Partial<AiSettings>;
     return {
-      ...DEFAULT_AI_SETTINGS,
-      ...saved,
+      personaId: saved.personaId ?? DEFAULT_AI_SETTINGS.personaId,
+      systemPrompt: saved.systemPrompt ?? DEFAULT_AI_SETTINGS.systemPrompt,
       responseMode:
         saved.responseMode === 'balanced' || saved.responseMode === 'thinking'
           ? saved.responseMode
           : 'fast',
-      // Older releases used 192 as the default ceiling. Raise that legacy
-      // default so Thinking mode can actually use its longer response budget.
-      maxTokens:
-        saved.responseMode === undefined && saved.maxTokens === 192
-          ? 1024
-          : saved.maxTokens ?? DEFAULT_AI_SETTINGS.maxTokens,
+      temperature: saved.temperature ?? DEFAULT_AI_SETTINGS.temperature,
+      maxTokens: saved.maxTokens ?? DEFAULT_AI_SETTINGS.maxTokens,
     };
   } catch {
     return DEFAULT_AI_SETTINGS;
@@ -159,24 +127,14 @@ export default function App() {
 
   // Start with a lightweight Qwen model suitable for CPU/WASM machines.
   // Keep the user's engine selection between desktop sessions.
-  const [selectedEngine, setSelectedEngine] = useState<AiEngineId>(
-    () => loadInitialSelectedEngine()
-  );
   const [neuralStatus, setNeuralStatus] = useState<NeuralModelStatus>('idle');
   const [neuralProgress, setNeuralProgress] = useState(0);
   const [neuralStatusMessage, setNeuralStatusMessage] = useState('');
-  const [cachedModelIds, setCachedModelIds] = useState<string[]>(() =>
-    getCachedNeuralModelIds()
-  );
-  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>('unchecked');
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadInitialAiSettings());
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   const llmBridgeRef = useRef<LocalLlmBridge | null>(null);
-  const ollamaAbortRef = useRef<AbortController | null>(null);
   const sessionsRef = useRef<ChatSession[]>([]);
   const activeSessionIdRef = useRef<string | null>(null);
 
@@ -203,51 +161,55 @@ export default function App() {
 
   const messages = activeSession?.messages ?? [];
 
-  const handleCheckOllama = async (urlOverride?: string) => {
-    setOllamaStatus('checking');
-    const result = await probeLocalOllama(urlOverride ?? ollamaUrl);
-    if (result.connected) {
-      setOllamaStatus('connected');
-      setOllamaModels(result.models);
-      setStatusError(null);
-    } else {
-      setOllamaStatus('offline');
-      setOllamaModels([]);
-    }
-  };
-
   useEffect(() => {
+    let disposed = false;
+    let loading = false;
+    let ready = false;
+
     const bridge = new LocalLlmBridge((evt) => {
+      if (disposed) return;
       setNeuralStatus(evt.status);
       setNeuralProgress(evt.progress);
       if (evt.message) setNeuralStatusMessage(evt.message);
+      if (evt.status === 'loading') loading = true;
       if (evt.status === 'ready') {
-        setCachedModelIds(getCachedNeuralModelIds());
+        loading = false;
+        ready = true;
+        setStatusError(null);
+        setNeuralStatusMessage('Qwen 3B connected · saved for future offline launches');
       }
-      if (evt.status === 'error' && evt.message) {
-        setStatusError(evt.message);
+      if (evt.status === 'error') {
+        loading = false;
+        ready = false;
+        setStatusError(evt.message || 'Qwen 3B could not be loaded.');
       }
     });
     llmBridgeRef.current = bridge;
+
+    const loadQwen = () => {
+      if (disposed || loading || ready) return;
+      loading = true;
+      setStatusError(null);
+      setNeuralStatus('loading');
+      setNeuralProgress(1);
+      setNeuralStatusMessage('Checking saved Qwen 3B files; downloading only if missing...');
+      bridge.loadModel(QWEN_MODEL_ID);
+    };
+
+    // On first launch, use the persistent cache or download the model once.
+    loadQwen();
+
+    // Retry automatically when internet connectivity returns after a failed first download.
+    const retryWhenOnline = () => {
+      if (!ready && !loading) loadQwen();
+    };
+    window.addEventListener('online', retryWhenOnline);
+
     return () => {
+      disposed = true;
+      window.removeEventListener('online', retryWhenOnline);
       bridge.dispose();
     };
-  }, []);
-
-  useEffect(() => {
-    if (selectedEngine === 'ollama:qwen2.5-coder:7b') {
-      void handleCheckOllama();
-      return;
-    }
-    if (
-      selectedEngine !== 'builtin-edge' &&
-      cachedModelIds.includes(selectedEngine)
-    ) {
-      setNeuralStatusMessage('Cached Qwen model found — loading it for offline use...');
-      llmBridgeRef.current?.loadModel(selectedEngine);
-    } else if (selectedEngine !== 'builtin-edge') {
-      setNeuralStatusMessage('Select Download & Cache Offline to install the lightweight Qwen model.');
-    }
   }, []);
 
   useEffect(() => {
@@ -391,41 +353,13 @@ export default function App() {
     }
   };
 
-  const handleSelectEngine = (engineId: AiEngineId) => {
-    setSelectedEngine(engineId);
-    try {
-      window.localStorage.setItem(ENGINE_STORAGE_KEY, engineId);
-    } catch {
-      // Engine selection still works for this session if storage is unavailable.
-    }
+  const handleRetryModel = () => {
     setStatusError(null);
-    if (engineId === 'builtin-edge') {
-      setNeuralStatus('idle');
-      setNeuralProgress(0);
-      setNeuralStatusMessage('');
-      return;
-    }
-    if (engineId === 'ollama:qwen2.5-coder:7b') {
-      handleCheckOllama();
-      return;
-    }
-    setNeuralStatus('idle');
-    setNeuralProgress(0);
-    setNeuralStatusMessage(
-      cachedModelIds.includes(engineId)
-        ? 'Cached locally — click Load Cached Model to activate'
-        : 'Click Download & Cache Offline to store weights locally'
-    );
-  };
-
-  const handleLoadNeuralModel = (engineId: AiEngineId) => {
-    setStatusError(null);
-    llmBridgeRef.current?.loadModel(engineId);
+    llmBridgeRef.current?.loadModel(QWEN_MODEL_ID);
   };
 
   const handleStopGeneration = () => {
     llmBridgeRef.current?.interrupt();
-    ollamaAbortRef.current?.abort();
   };
 
   const handleUploadFiles = async (fileList: FileList | File[]) => {
@@ -552,161 +486,76 @@ export default function App() {
       return;
     }
 
-    const browserModelSelected =
-      selectedEngine !== 'builtin-edge' &&
-      selectedEngine !== 'ollama:qwen2.5-coder:7b';
-
-    if (browserModelSelected && neuralStatus !== 'ready') {
-      const message =
-        neuralStatus === 'loading'
-          ? 'Qwen is still loading. Wait until AI Settings shows “Ready offline”, then send your message again.'
-          : 'Qwen is not ready yet. Open AI Settings and download the model or load its cached weights. Choose Built-in Edge AI only when you want to use the lightweight fallback.';
+    if (neuralStatus !== 'ready' || !llmBridgeRef.current) {
+      const message = neuralStatus === 'loading'
+        ? 'Qwen 3B is downloading or reconnecting to its saved local files. Please wait for Ready offline.'
+        : 'Qwen 3B is not ready. Connect to the internet for its first download; a saved model will load automatically when Cairn starts.';
       setStatusError(message);
-      const assistantMsg: ChatMessage = {
-        id: `msg-a-${Date.now() + 1}`,
-        role: 'assistant',
-        content: message,
-        createdAt: Date.now() + 1,
-        intent: 'general',
-        engineLabel: 'Qwen runtime not ready',
-      };
       await commitSessionUpdate(targetSessionId, query, (prev) => [
         ...prev,
-        assistantMsg,
+        {
+          id: `msg-a-${Date.now() + 1}`,
+          role: 'assistant',
+          content: message,
+          createdAt: Date.now() + 1,
+          intent: 'general',
+          engineLabel: 'Qwen 2.5 Coder 3B',
+        },
       ]);
       return;
     }
 
-    const useOllama =
-      selectedEngine === 'ollama:qwen2.5-coder:7b' &&
-      ollamaStatus === 'connected';
-
-    if (useOllama) {
-      setIsGenerating(true);
-      setStreamingText('');
-      const rag = retrieveContextForQuery(
-        query,
-        selectedDocs,
-        allChunks,
-        getRetrievalLimit(aiSettings.responseMode)
-      );
-      const llmMessages = buildLlmMessages(
-        query,
-        priorHistory,
-        rag.contextBlock,
-        selectedDocs,
-        aiSettings.systemPrompt,
-        aiSettings.responseMode
-      );
-      if (attachments && attachments.length > 0 && llmMessages.length > 0) {
-        const encodedImages = attachments
-          .map((a) => a.dataUrl.split(',')[1] || '')
-          .filter(Boolean);
-        if (encodedImages.length > 0) {
-          llmMessages[llmMessages.length - 1] = {
-            ...llmMessages[llmMessages.length - 1],
-            images: encodedImages,
-          };
-        }
-      }
-
-      const controller = new AbortController();
-      ollamaAbortRef.current = controller;
-      const preferred = aiSettings.customOllamaModel.trim().toLowerCase();
-      const targetModel =
-        (preferred &&
-          ollamaModels.find((m) => m.toLowerCase() === preferred)) ||
-        (preferred &&
-          ollamaModels.find((m) => m.toLowerCase().includes(preferred))) ||
-        ollamaModels.find((m) => m.toLowerCase().startsWith('qwen2.5-coder:7b')) ||
-        ollamaModels.find((m) => m.toLowerCase().includes('qwen2.5-coder')) ||
-        aiSettings.customOllamaModel ||
-        'qwen2.5-coder:7b';
-
-      try {
-        const finalAnswer = await streamOllamaChat({
-          baseUrl: ollamaUrl,
-          model: targetModel,
-          messages: llmMessages,
-          temperature: getResponseTemperature(aiSettings),
-          maxTokens: getFastResponseTokenBudget(query, aiSettings),
-          onToken: (partial) => setStreamingText(partial),
-          signal: controller.signal,
-        });
-        const assistantMsg: ChatMessage = {
+    if (attachments && attachments.length > 0) {
+      const message = 'Qwen 2.5 Coder 3B is a text-and-code model and cannot inspect image pixels. Remove the image attachment and send the text prompt.';
+      setStatusError(message);
+      await commitSessionUpdate(targetSessionId, query, (prev) => [
+        ...prev,
+        {
           id: `msg-a-${Date.now() + 1}`,
           role: 'assistant',
-          content: finalAnswer || 'Generation stopped.',
+          content: message,
           createdAt: Date.now() + 1,
-          citations: rag.citations,
-          extractedMetrics: rag.extractedMetrics,
-          keyThemes: rag.keyThemes,
-          suggestedFollowUps: [
-            'Explain this further',
-            'Make it shorter',
-            '/code Write unit tests for this',
-          ],
           intent: 'general',
-          scopedDocNames: selectedDocs.map((d) => d.name),
-          engineLabel: `Qwen 2.5 Coder (${targetModel})`,
-        };
-        setStreamingText(null);
-        setIsGenerating(false);
-        await commitSessionUpdate(targetSessionId, query, (prev) => [
-          ...prev,
-          assistantMsg,
-        ]);
-        return;
-      } catch (err) {
-        setStreamingText(null);
-        setIsGenerating(false);
-        if (err instanceof Error && err.name === 'AbortError') {
-          return;
-        }
-        setStatusError(
-          err instanceof Error
-            ? `${err.message} — using Built-in Edge AI fallback.`
-            : 'Local Ollama unavailable — using Built-in Edge AI fallback.'
-        );
-      }
+          engineLabel: 'Qwen 2.5 Coder 3B',
+        },
+      ]);
+      return;
     }
 
-    const useBrowserNeural =
-      selectedEngine !== 'builtin-edge' &&
-      selectedEngine !== 'ollama:qwen2.5-coder:7b' &&
-      neuralStatus === 'ready' &&
-      llmBridgeRef.current;
+    setIsGenerating(true);
+    setStreamingText('');
+    const rag = retrieveContextForQuery(
+      query,
+      selectedDocs,
+      allChunks,
+      getRetrievalLimit(aiSettings.responseMode)
+    );
+    const llmMessages = buildLlmMessages(
+      query,
+      priorHistory,
+      rag.contextBlock,
+      selectedDocs,
+      aiSettings.systemPrompt,
+      aiSettings.responseMode
+    );
 
-    if (useBrowserNeural) {
-      setIsGenerating(true);
-      setStreamingText('');
-      const rag = retrieveContextForQuery(query, selectedDocs, allChunks, getRetrievalLimit(aiSettings.responseMode));
-      const llmMessages = buildLlmMessages(
-        query,
-        priorHistory,
-        rag.contextBlock,
-        selectedDocs,
-        aiSettings.systemPrompt,
-        aiSettings.responseMode
+    try {
+      const finalAnswer = await llmBridgeRef.current.generate(
+        llmMessages,
+        (partial) => setStreamingText(partial),
+        {
+          maxNewTokens: getFastResponseTokenBudget(query, aiSettings),
+          temperature: getResponseTemperature(aiSettings),
+        }
       );
-      const engineLabel =
-        LOCAL_AI_MODELS.find((m) => m.id === selectedEngine)?.label ||
-        'On-Device LLM';
-
-      try {
-        const finalAnswer = await llmBridgeRef.current!.generate(
-          llmMessages,
-          (partial) => setStreamingText(partial),
-          {
-            maxNewTokens: getFastResponseTokenBudget(query, aiSettings),
-            temperature: getResponseTemperature(aiSettings),
-          }
-        );
-        const assistantMsg: ChatMessage = {
+      setStreamingText(null);
+      setIsGenerating(false);
+      await commitSessionUpdate(targetSessionId, query, (prev) => [
+        ...prev,
+        {
           id: `msg-a-${Date.now() + 1}`,
           role: 'assistant',
-          content:
-            finalAnswer || 'Generation stopped before producing output.',
+          content: finalAnswer || 'Generation stopped before producing output.',
           createdAt: Date.now() + 1,
           citations: rag.citations,
           extractedMetrics: rag.extractedMetrics,
@@ -714,53 +563,29 @@ export default function App() {
           suggestedFollowUps: ['Make it shorter', 'Write an email summary'],
           intent: 'general',
           scopedDocNames: selectedDocs.map((d) => d.name),
-          engineLabel,
-        };
-        setStreamingText(null);
-        setIsGenerating(false);
-        await commitSessionUpdate(targetSessionId, query, (prev) => [
-          ...prev,
-          assistantMsg,
-        ]);
-        return;
-      } catch (err) {
-        setStreamingText(null);
-        setIsGenerating(false);
-        setStatusError(
-          err instanceof Error
-            ? `${err.message} — falling back to Built-in Edge AI.`
-            : 'Neural generation error — falling back to Built-in Edge AI.'
-        );
-      }
+          engineLabel: 'Qwen 2.5 Coder 3B',
+        },
+      ]);
+      return;
+    } catch (error) {
+      setStreamingText(null);
+      setIsGenerating(false);
+      const message = error instanceof Error ? error.message : 'Qwen 3B generation failed.';
+      setStatusError(message);
+      await commitSessionUpdate(targetSessionId, query, (prev) => [
+        ...prev,
+        {
+          id: `msg-a-${Date.now() + 1}`,
+          role: 'assistant',
+          content: `Qwen 3B error: ${message}`,
+          createdAt: Date.now() + 1,
+          intent: 'general',
+          engineLabel: 'Qwen 2.5 Coder 3B',
+        },
+      ]);
+      return;
     }
 
-    const routed = routeOfflineQuery({
-      query,
-      selectedDocs,
-      allChunks,
-      history: priorHistory,
-      settings: aiSettings,
-      attachments,
-    });
-
-    const assistantMsg: ChatMessage = {
-      id: `msg-a-${Date.now() + 1}`,
-      role: 'assistant',
-      content: routed.answer,
-      createdAt: Date.now() + 1,
-      citations: routed.citations,
-      extractedMetrics: routed.extractedMetrics,
-      keyThemes: routed.keyThemes,
-      suggestedFollowUps: routed.suggestedFollowUps,
-      intent: routed.intent,
-      scopedDocNames: selectedDocs.map((d) => d.name),
-      engineLabel: 'Cairn Edge AI',
-    };
-
-    await commitSessionUpdate(targetSessionId, query, (prev) => [
-      ...prev,
-      assistantMsg,
-    ]);
   };
 
   const handleSendQuery = async (
@@ -916,11 +741,6 @@ export default function App() {
             options?.highlights && options.highlights.length > 0
               ? options.highlights
               : summaryContext?.briefingBullets,
-          ollamaConfig: {
-            baseUrl: ollamaUrl,
-            model: aiSettings.customOllamaModel || 'qwen2.5-coder:7b',
-            connected: ollamaStatus === 'connected',
-          },
         });
       } else if (kind === 'audio') {
         setGenerationLabel('Synthesizing local WAV audio briefing...');
@@ -1200,20 +1020,15 @@ export default function App() {
                 generationLabel={generationLabel}
                 livePreviewFrame={livePreviewFrame}
                 streamingText={streamingText}
-                selectedEngine={selectedEngine}
                 neuralStatus={neuralStatus}
                 neuralProgress={neuralProgress}
                 neuralStatusMessage={neuralStatusMessage}
-                cachedModelIds={cachedModelIds}
-                ollamaStatus={ollamaStatus}
-                ollamaModels={ollamaModels}
                 aiSettings={aiSettings}
                 onOpenSettings={() => setSettingsModalOpen(true)}
                 onChangeResponseMode={(responseMode) =>
                   handleSaveSettings({ ...aiSettings, responseMode })
                 }
-                onSelectEngine={handleSelectEngine}
-                onLoadNeuralModel={handleLoadNeuralModel}
+                onRetryModel={handleRetryModel}
                 onStopGeneration={handleStopGeneration}
                 onSendQuery={handleSendQuery}
                 onEditUserMessage={handleEditUserMessage}
@@ -1273,18 +1088,6 @@ export default function App() {
         onClose={() => setSettingsModalOpen(false)}
         settings={aiSettings}
         onSaveSettings={handleSaveSettings}
-        selectedEngine={selectedEngine}
-        onSelectEngine={handleSelectEngine}
-        ollamaUrl={ollamaUrl}
-        ollamaStatus={ollamaStatus}
-        ollamaModels={ollamaModels}
-        onChangeOllamaUrl={setOllamaUrl}
-        onCheckOllama={() => handleCheckOllama()}
-        neuralStatus={neuralStatus}
-        neuralProgress={neuralProgress}
-        neuralStatusMessage={neuralStatusMessage}
-        cachedModelIds={cachedModelIds}
-        onLoadNeuralModel={handleLoadNeuralModel}
       />
     </div>
   );

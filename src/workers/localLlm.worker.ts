@@ -4,6 +4,7 @@ import {
   InterruptableStoppingCriteria,
   TextStreamer,
 } from '@huggingface/transformers';
+import { QWEN_MODEL_ID } from '../types/workspace';
 
 // Transformers.js keeps model files in the browser Cache Storage so the
 // same model can be loaded again without a network connection.
@@ -29,6 +30,38 @@ let loadedModelId: string | null = null;
 let generator: any = null;
 let activeBackend: 'webgpu' | 'wasm' = 'wasm';
 const stoppingCriteria = new InterruptableStoppingCriteria();
+
+let legacyCacheCleanup: Promise<void> | null = null;
+
+async function removeLegacyModelCacheEntries(): Promise<void> {
+  if (!legacyCacheCleanup) {
+    legacyCacheCleanup = (async () => {
+      const legacyNames = [
+        'Qwen2.5-Coder-0.5B-Instruct',
+        'Qwen2.5-Coder-1.5B-Instruct',
+        'Qwen2.5-Coder-7B-Instruct',
+      ];
+      try {
+        for (const cacheName of await caches.keys()) {
+          const cache = await caches.open(cacheName);
+          const requests = await cache.keys();
+          await Promise.all(
+            requests
+              .filter((request) => {
+                let url = request.url;
+                try { url = decodeURIComponent(url); } catch { /* use original URL */ }
+                return legacyNames.some((name) => url.includes(name));
+              })
+              .map((request) => cache.delete(request))
+          );
+        }
+      } catch {
+        // Old model cache cleanup is best-effort.
+      }
+    })();
+  }
+  await legacyCacheCleanup;
+}
 
 async function detectWebGpu(): Promise<boolean> {
   try {
@@ -87,23 +120,15 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
       await disposeCurrentGenerator();
       stoppingCriteria.reset();
 
-      const isLargeModel = msg.modelId.toUpperCase().includes('7B');
-      const hasWebGpu = await detectWebGpu();
-
-      if (isLargeModel && !hasWebGpu) {
-        throw new Error(
-          'Qwen 7B needs a compatible WebGPU graphics device with substantial dedicated memory. This PC should use Qwen 0.5B or 1.5B in CPU/WASM mode instead.'
-        );
+      if (msg.modelId !== QWEN_MODEL_ID) {
+        throw new Error('Cairn supports only the Qwen 2.5 Coder 3B model.');
       }
 
-      // Small models try the GPU first, then automatically fall back to CPU/WASM.
-      // A detected WebGPU adapter does not guarantee that every ONNX operation
-      // or quantized model is supported by that driver.
-      const backends: Array<'webgpu' | 'wasm'> = isLargeModel
-        ? ['webgpu']
-        : hasWebGpu
-          ? ['webgpu', 'wasm']
-          : ['wasm'];
+      await removeLegacyModelCacheEntries();
+      const hasWebGpu = await detectWebGpu();
+      const backends: Array<'webgpu' | 'wasm'> = hasWebGpu
+        ? ['webgpu', 'wasm']
+        : ['wasm'];
 
       const progressMap = new Map<string, number>();
       const onProgress = (info: {
@@ -132,17 +157,16 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
             type: 'status',
             message:
               backend === 'webgpu'
-                ? `Loading ${msg.modelId} on WebGPU...`
+                ? 'Connecting Qwen 3B with WebGPU...'
                 : hasWebGpu
-                  ? 'GPU runtime was not compatible; retrying on CPU/WASM...'
-                  : `Loading ${msg.modelId} on CPU/WASM...`,
+                  ? 'WebGPU is unavailable for this model; continuing with CPU/WASM...'
+                  : 'Loading Qwen 3B on CPU/WASM...',
             progress: index === 0 ? 2 : 90,
           });
 
           const loaded = await pipeline('text-generation', msg.modelId, {
-            // The published 0.5B/1.5B ONNX model cards use q4.
-            // Reserve q4f16 for the large 7B WebGPU model.
-            dtype: isLargeModel ? 'q4f16' : 'q4',
+            // Use the published Qwen 3B quantized ONNX Q4 weights.
+            dtype: 'q4',
             device: backend,
             progress_callback: onProgress,
           });
@@ -165,7 +189,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
           if (index < backends.length - 1) {
             self.postMessage({
               type: 'status',
-              message: `WebGPU could not start this model. Retrying with CPU/WASM: ${errorMessage(error)}`,
+              message: `WebGPU could not start Qwen 3B. Retrying with CPU/WASM: ${errorMessage(error)}`,
               progress: 90,
             });
           }
