@@ -172,7 +172,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   systemPrompt: AI_PERSONAS[0].systemPrompt,
   responseMode: 'fast',
   temperature: 0.3,
-  maxTokens: 384,
+  maxTokens: 1024,
   customOllamaModel: 'qwen2.5-coder:7b',
 };
 
