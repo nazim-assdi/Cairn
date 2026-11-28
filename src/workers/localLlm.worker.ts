@@ -9,6 +9,8 @@ import {
 // same model can be loaded again without a network connection.
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+// Enable SIMD kernels for faster local CPU/WASM inference where the browser supports them.
+env.backends.onnx.wasm.simd = true;
 
 type WorkerRequest =
   | { type: 'load'; modelId: string }
